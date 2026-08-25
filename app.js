@@ -91,7 +91,7 @@ const __ma_module_0 = (() => {
 })();
 
 const __ma_module_1 = (() => {
-  const { CancellationToken, clone, digest, errorText, fault, invariant } = __ma_module_0;
+  const { CancellationToken, clone, digest, errorText, fault, invariant, stableStringify } = __ma_module_0;
   const ensureHost = (condition, message, code = 'CONTRACT') => invariant(condition, message, 'host', code);
   
   function hostContext() {
@@ -195,9 +195,21 @@ const __ma_module_1 = (() => {
       return this.context().getWorldInfoNames();
     }
   
+    captureStateOrigin() {
+      const context = this.context();
+      const chatKey = this.chatKey();
+      const character = context.characters?.[context.characterId];
+      return Object.freeze({
+        chatKey,
+        worldbookName: this.worldbookName(),
+        groupId: context.groupId ? chatKey : '',
+        characterName: String(character?.name ?? ''),
+        avatarUrl: String(character?.avatar ?? ''),
+      });
+    }
+  
     messageIndex(value) {
-      // ST events pass a number or { messageId }; chat DOM uses mesid attributes.
-      const raw = value != null && typeof value === 'object' ? value.messageId : value;
+      const raw = typeof value === 'object' ? value?.messageId ?? value?.mesId ?? value?.index : value;
       const index = Number(raw);
       return Number.isInteger(index) && index >= 0 ? index : -1;
     }
@@ -218,7 +230,11 @@ const __ma_module_1 = (() => {
     captureChat(token = new CancellationToken()) {
       const chatKey = this.chatKey();
       ensureHost(chatKey, '请先打开一个聊天', 'CHAT_REQUIRED');
-      return Object.freeze({ chatKey, messageIndex: -1, worldbookName: this.worldbookName(), token });
+      return Object.freeze({ chatKey, messageIndex: -1, worldbookName: this.worldbookName(), stateOrigin: this.captureStateOrigin(), token });
+    }
+  
+    captureLatest(token = new CancellationToken()) {
+      return this.captureAssistant(-1, token);
     }
   
     isAssistantMessage(index) {
@@ -311,21 +327,16 @@ const __ma_module_1 = (() => {
     }
   
     connectionProfiles() {
-      if (!this.connectionProfilesAvailable()) return [];
-      return this.context().ConnectionManagerRequestService.getSupportedProfiles().map(profile => ({
-        id: String(profile.id),
-        name: String(profile.name ?? profile.id),
-        api: String(profile.api ?? ''),
-      }));
+      const service = this.context().ConnectionManagerRequestService;
+      if (!this.connectionProfilesAvailable() || typeof service?.getSupportedProfiles !== 'function') return [];
+      return service.getSupportedProfiles().map(profile => ({ id: String(profile.id), name: String(profile.name ?? profile.id), api: String(profile.api ?? '') }));
     }
   
     profileSummary(profileId) {
-      try {
-        const profile = this.context().ConnectionManagerRequestService?.getProfile?.(profileId);
-        return profile ? { id: String(profileId), name: String(profile.name ?? profileId), api: String(profile.api ?? '') } : null;
-      } catch {
-        return null;
-      }
+      let profile;
+      try { profile = this.context().ConnectionManagerRequestService?.getProfile?.(profileId); } catch { return null; }
+      if (!profile) return null;
+      return { id: String(profileId), name: String(profile.name ?? profile.profileName ?? profileId), api: String(profile.api ?? profile.source ?? '') };
     }
   
     async generate({ system, user, responseTokens, profileId, token }) {
@@ -363,7 +374,7 @@ const __ma_module_1 = (() => {
   
     async updateState(mutator) {
       const context = this.context();
-      const chatKey = this.chatKey();
+      const chatKey = String(context.getCurrentChatId?.() ?? context.chatId ?? '');
       ensureHost(typeof context.saveMetadata === 'function', 'SillyTavern 未提供聊天元数据保存接口', 'METADATA_API');
       const current = this.state();
       mutator(current);
@@ -377,6 +388,47 @@ const __ma_module_1 = (() => {
         }
         ensureHost(this.chatKey() === chatKey, '运行状态保存期间聊天已经切换', 'METADATA_CHAT_CHANGED');
         return result;
+      });
+      this.metadataQueue = update;
+      return update;
+    }
+  
+    async updateStateFor(origin, mutator) {
+      ensureHost(origin?.chatKey, '原聊天运行状态缺少聊天标识', 'METADATA_ORIGIN');
+      if (this.chatKey() === origin.chatKey && (!origin.worldbookName || this.worldbookName() === origin.worldbookName)) return this.updateState(mutator);
+      const update = this.metadataQueue.catch(() => undefined).then(async () => {
+        const context = this.context();
+        ensureHost(typeof globalThis.fetch === 'function' && typeof context.getRequestHeaders === 'function', 'SillyTavern 未提供原聊天元数据接口', 'METADATA_ORIGIN_API');
+        const group = Boolean(origin.groupId);
+        const request = group
+          ? { id: origin.chatKey }
+          : { ch_name: origin.characterName, file_name: origin.chatKey, avatar_url: origin.avatarUrl };
+        const endpoint = group ? '/api/chats/group' : '/api/chats';
+        const response = await globalThis.fetch(`${endpoint}/get`, {
+          method: 'POST', headers: context.getRequestHeaders(), cache: 'no-cache', body: JSON.stringify(request),
+        });
+        ensureHost(response.ok, `无法读取原聊天“${origin.chatKey}”运行状态：HTTP ${response.status}`, 'METADATA_ORIGIN_READ');
+        const chat = clone(await response.json());
+        ensureHost(Array.isArray(chat) && chat.length && chat[0]?.chat_metadata, '原聊天文件缺少元数据头', 'METADATA_ORIGIN_READ');
+        const metadata = chat[0].chat_metadata;
+        if (origin.worldbookName) ensureHost(String(metadata.world_info ?? '') === origin.worldbookName, '原聊天绑定的世界书已经变化', 'METADATA_ORIGIN_BOOK');
+        const state = hydrateChatState(metadata);
+        mutator(state);
+        const expected = clone(state);
+        const saveBody = group
+          ? { id: origin.chatKey, chat }
+          : { ...request, chat };
+        const saved = await globalThis.fetch(`${endpoint}/save`, {
+          method: 'POST', headers: context.getRequestHeaders(), cache: 'no-cache', body: JSON.stringify(saveBody),
+        });
+        ensureHost(saved.ok, `无法保存原聊天“${origin.chatKey}”运行状态：HTTP ${saved.status}`, 'METADATA_ORIGIN_WRITE');
+        const verifiedResponse = await globalThis.fetch(`${endpoint}/get`, {
+          method: 'POST', headers: context.getRequestHeaders(), cache: 'no-cache', body: JSON.stringify(request),
+        });
+        ensureHost(verifiedResponse.ok, `无法回读原聊天“${origin.chatKey}”运行状态`, 'METADATA_ORIGIN_VERIFY');
+        const verified = await verifiedResponse.json();
+        ensureHost(stableStringify(verified?.[0]?.chat_metadata?.[EXTENSION_KEY]) === stableStringify(expected), '原聊天运行状态保存后回读不一致', 'METADATA_ORIGIN_VERIFY');
+        return expected;
       });
       this.metadataQueue = update;
       return update;
@@ -411,9 +463,18 @@ const __ma_module_1 = (() => {
     };
   }
   
+  function hydrateChatState(metadata) {
+    if (!metadata[EXTENSION_KEY] || typeof metadata[EXTENSION_KEY] !== 'object') metadata[EXTENSION_KEY] = {};
+    const state = metadata[EXTENSION_KEY];
+    const defaults = defaultChatState();
+    for (const [key, value] of Object.entries(defaults)) if (state[key] === undefined) state[key] = clone(value);
+    return state;
+  }
+  
   function responseText(output) {
     if (typeof output === 'string') return output.trim();
-    return String(output?.content ?? '').trim();
+    const value = output?.content ?? output?.text ?? output?.response ?? output?.choices?.[0]?.message?.content ?? output?.choices?.[0]?.text;
+    return String(value ?? '').trim();
   }
   return Object.freeze({ EXTENSION_KEY, DEFAULT_SETTINGS, SettingsStore, HostAdapter });
 })();
@@ -475,9 +536,124 @@ const __ma_module_2 = (() => {
 })();
 
 const __ma_module_3 = (() => {
+  const { WORLD_TYPES, sectionNames } = __ma_module_2;
+  const { normalizeIdentity, unique } = __ma_module_0;
+  const EMPTY_RELATIONS = new Set([
+    '无', '空', '没有', '无关联', '无关联对象',
+    'none', 'null', 'nil', 'n/a', 'na', 'not applicable', 'no relation', 'no relations',
+  ]);
+  
+  const NATIVE_RELATION_HEADING = '【镜渊关系】';
+  const NATIVE_RELATION_LINE = /^-\s+【(.+)】$/u;
+  
+  function normalizeRelations(values) {
+    const source = Array.isArray(values) ? values : [values];
+    return unique(source.flatMap(value => String(value ?? '').split('、'))
+      .map(normalizeRelationText)
+      .filter(value => value && !isEmptyRelation(value)));
+  }
+  
+  function parseRelationTarget(value) {
+    const text = normalizeRelationText(value);
+    const separator = text.indexOf('｜');
+    if (separator <= 0 || text.indexOf('｜', separator + 1) !== -1) return null;
+    const type = text.slice(0, separator).trim();
+    const name = text.slice(separator + 1).trim();
+    if (!WORLD_TYPES.includes(type) || !name || name.length > 80 || /[\r\n]/u.test(name)) return null;
+    return { type, name, title: `${type}｜${name}` };
+  }
+  
+  function explicitReferences(content, type) {
+    const headings = new Set(sectionNames(type));
+    const { factContent } = splitNativeRelationContent(content);
+    return normalizeRelations([...factContent.matchAll(/【([^】]+)】/gu)]
+      .map(match => match[1].trim())
+      .filter(value => value && !headings.has(value)));
+  }
+  
+  /**
+   * ST's native recursive scan consumes activated entry content, not extension
+   * metadata. Keep a canonical relation block in that same authoritative content
+   * field, separate from schema facts, so native recursion can match ordinary keys.
+   */
+  function withNativeRelationBlock(content, relations) {
+    const { factContent } = splitNativeRelationContent(content);
+    const references = normalizeRelations(relations);
+    const block = references.length
+      ? [NATIVE_RELATION_HEADING, ...references.map(reference => `- 【${reference}】`)].join('\n')
+      : '';
+    return [factContent, block].filter(Boolean).join('\n\n');
+  }
+  
+  function splitNativeRelationContent(content) {
+    const text = String(content ?? '').trim();
+    const lines = text.split(/\r?\n/u);
+    const headingIndex = lines.findIndex(line => line.trim() === NATIVE_RELATION_HEADING);
+    if (headingIndex < 0) return { factContent: text, relations: [], relationBlock: 'absent' };
+    const tail = lines.slice(headingIndex + 1).filter(line => line.trim());
+    const factContent = lines.slice(0, headingIndex).join('\n').trim();
+    if (!tail.length) return { factContent, relations: [], relationBlock: 'empty' };
+    const matches = tail.map(line => line.trim().match(NATIVE_RELATION_LINE));
+    if (matches.some(match => !match)) return { factContent: text, relations: [], relationBlock: 'invalid' };
+    return {
+      factContent,
+      relations: normalizeRelations(matches.map(match => match[1])),
+      relationBlock: 'valid',
+    };
+  }
+  
+  function projectRelations(entries) {
+    const byTitle = new Map();
+    const byName = new Map();
+    for (const entry of entries) {
+      byTitle.set(normalizeIdentity(entry.title), entry);
+      const key = normalizeIdentity(entry.name);
+      if (!byName.has(key)) byName.set(key, []);
+      byName.get(key).push(entry);
+    }
+    return entries.map(entry => {
+      const references = normalizeRelations([...entry.relations, ...explicitReferences(entry.content, entry.type)]);
+      const related = [];
+      for (const reference of references) {
+        const exact = byTitle.get(normalizeIdentity(reference));
+        const named = byName.get(normalizeIdentity(reference)) ?? [];
+        const target = exact ?? (named.length === 1 ? named[0] : null);
+        if (target && target.uid !== entry.uid) related.push({ uid: target.uid, title: target.title });
+      }
+      return { ...entry, references, related: uniqueByUid(related) };
+    });
+  }
+  
+  function uniqueByUid(values) {
+    const seen = new Set();
+    return values.filter(value => !seen.has(value.uid) && seen.add(value.uid));
+  }
+  
+  function isEmptyRelation(value) {
+    const bare = normalizeIdentity(value)
+      .replace(/^[\s()[\]{}（）【】]+|[\s()[\]{}（）【】。.！!]+$/gu, '');
+    return EMPTY_RELATIONS.has(bare);
+  }
+  
+  function normalizeRelationText(value) {
+    let text = String(value ?? '').trim();
+    // Models often copy the UI's reference decoration into the protocol field.
+    // It is presentation, not part of the stable name; retaining it would create
+    // a nested `【【name】】` tail that our own schema correctly rejects.
+    while (text.length > 2 && text.startsWith('【') && text.endsWith('】')) {
+      text = text.slice(1, -1).trim();
+    }
+    return text;
+  }
+  return Object.freeze({ normalizeRelations, parseRelationTarget, explicitReferences, withNativeRelationBlock, splitNativeRelationContent, projectRelations });
+})();
+
+const __ma_module_4 = (() => {
   const { WORLD_SCHEMA, WORLD_TYPES, hasSection, sectionNames, sectionPolicy } = __ma_module_2;
+  const { normalizeRelations, splitNativeRelationContent, withNativeRelationBlock } = __ma_module_3;
   const { invariant, normalizeIdentity, unique } = __ma_module_0;
   const ensureEntry = (condition, message, code = 'LORE_ITEM') => invariant(condition, message, 'protocol', code);
+  const RELATION_CONTENT_VERSION = 1;
   
   const TITLE = /^(人物|场景|物品|事件|世界|基础设定)｜([^｜\r\n]+)$/u;
   const HEADING = /^【([^】]+)】$/u;
@@ -495,7 +671,8 @@ const __ma_module_3 = (() => {
   function parseSections(content, type) {
     const values = new Map();
     let current = '';
-    for (const rawLine of String(content ?? '').split(/\r?\n/u)) {
+    const { factContent } = splitNativeRelationContent(content);
+    for (const rawLine of factContent.split(/\r?\n/u)) {
       const line = rawLine.trim();
       if (!line) continue;
       const heading = line.match(HEADING)?.[1]?.trim();
@@ -528,8 +705,9 @@ const __ma_module_3 = (() => {
     const merged = new Map([...currentSections].map(([section, facts]) => [section, [...facts]]));
     for (const row of rows) {
       const facts = merged.get(row.section) ?? [];
-      if (sectionPolicy(type, row.section) === 'replace') merged.set(row.section, [row.fact]);
-      else merged.set(row.section, unique([...facts, row.fact]));
+      const fact = String(row.fact ?? '').trim();
+      if (sectionPolicy(type, row.section) === 'replace') merged.set(row.section, [fact]);
+      else merged.set(row.section, unique([...facts, fact]));
     }
     return merged;
   }
@@ -568,7 +746,7 @@ const __ma_module_3 = (() => {
       order,
       insertionPlanned: position === insertion.position && order === insertion.order,
       temporalOrderSaturated: insertion.saturated,
-      relations: unique(raw?.extensions?.mirrorAbyss?.relations),
+      relations: nativeRelations(raw),
       updatedAt: Number(raw?.extensions?.mirrorAbyss?.updatedAt) || 0,
       messageIndex: Number(raw?.extensions?.mirrorAbyss?.messageIndex ?? -1),
       scene: String(raw?.extensions?.mirrorAbyss?.scene ?? ''),
@@ -601,14 +779,28 @@ const __ma_module_3 = (() => {
     const extension = raw?.extensions?.mirrorAbyss ?? {};
     const managed = extension.managed === true;
     ensureEntry(!managed || extension.cornerstone !== true, `基石条目“${raw?.comment ?? raw?.uid ?? '未知'}”为只读，请先解除基石锁`, 'CORNERSTONE_READONLY');
+    const relationState = splitNativeRelationContent(raw?.content);
+    ensureEntry(!managed || relationState.relationBlock !== 'invalid', `UID ${raw?.uid ?? '未知'}的【镜渊关系】尾块格式无效，请先在SillyTavern原生世界书中修正`, 'RELATION_BLOCK_INVALID');
+    const relations = nativeRelations(raw, relationState);
     raw.comment = `${type}｜${name}`;
-    raw.content = content;
-    raw.key = managed ? unique(aliases.length ? aliases : raw.key) : unique([name, ...aliases]);
+    raw.content = withNativeRelationBlock(content, relations);
+    // Native relation blocks may reference either the stable name or the exact
+    // managed title. Keep both identities in ST's primary-key list across recall
+    // and body edits so either form stays discoverable without a parallel resolver.
+    raw.key = managed
+      ? unique([name, `${type}｜${name}`, ...(aliases.length ? aliases : raw.key)])
+      : unique([name, `${type}｜${name}`, ...aliases]);
     if (!managed) applyRecallDefaults(raw, type, extension.focus === true);
     applyInsertionFields(raw, type, extension.messageIndex);
     raw.extensions ??= {};
     const preservedExtension = { ...extension };
-    raw.extensions.mirrorAbyss = { ...preservedExtension, managed: true, cornerstone: extension.cornerstone === true };
+    raw.extensions.mirrorAbyss = {
+      ...preservedExtension,
+      managed: true,
+      cornerstone: extension.cornerstone === true,
+      relations,
+      relationContentVersion: RELATION_CONTENT_VERSION,
+    };
     return raw;
   }
   
@@ -630,7 +822,10 @@ const __ma_module_3 = (() => {
   
   function updateNativeRecall(raw, { keywords, secondaryKeywords, secondaryLogic, constant, recursable, continuesRecursion }) {
     const managed = mutableManagedEntry(raw);
-    const keys = unique(keywords);
+    // Relations can use a stable name or the exact managed title. The matching
+    // target must retain both as native primary keys even when the player
+    // replaces all custom aliases.
+    const keys = unique([managed.name, managed.title, ...keywords]);
     const secondary = unique(secondaryKeywords);
     const logic = Number(secondaryLogic);
     ensureEntry(constant === true || keys.length > 0, '关键词触发条目至少需要一个主要关键词', 'RECALL_KEY');
@@ -641,6 +836,9 @@ const __ma_module_3 = (() => {
     raw.selective = true;
     raw.selectiveLogic = logic;
     raw.constant = constant === true;
+    // Scene vectors are exclusively distant-history recall. Switching a scene
+    // to ST native constant recall therefore closes the vector lifecycle.
+    if (managed.type === '场景' && raw.constant) raw.vectorized = false;
     raw.excludeRecursion = recursable !== true;
     raw.preventRecursion = continuesRecursion !== true;
     return raw;
@@ -654,7 +852,10 @@ const __ma_module_3 = (() => {
     raw.extensions.mirrorAbyss.messageIndex = Number(messageIndex);
     raw.extensions.mirrorAbyss.scene = String(scene || '');
     // 关系是本次明确输出的投影；覆盖旧值，避免已经失效的关系永久累积。
-    raw.extensions.mirrorAbyss.relations = unique(relations);
+    const normalizedRelations = normalizeRelations(relations);
+    raw.extensions.mirrorAbyss.relations = normalizedRelations;
+    raw.extensions.mirrorAbyss.relationContentVersion = RELATION_CONTENT_VERSION;
+    raw.content = withNativeRelationBlock(raw.content, normalizedRelations);
     applyInsertionFields(raw, managed.type, messageIndex);
     return raw;
   }
@@ -700,11 +901,20 @@ const __ma_module_3 = (() => {
     raw.position = insertion.position;
     raw.order = insertion.order;
   }
+  
+  function nativeRelations(raw, relationState = splitNativeRelationContent(raw?.content)) {
+    if (relationState.relationBlock === 'valid' || relationState.relationBlock === 'empty') {
+      return normalizeRelations(relationState.relations);
+    }
+    const extension = raw?.extensions?.mirrorAbyss ?? {};
+    if (relationState.relationBlock === 'absent' && Number(extension.relationContentVersion) >= RELATION_CONTENT_VERSION) return [];
+    return normalizeRelations(extension.relations);
+  }
   return Object.freeze({ parseManagedTitle, identityKey, parseSections, serializeSections, mergeRows, parseManagedEntry, managedEntries, assertUniqueManagedIdentities, applyNativeEntryFields, setNativeCornerstone, setNativeFocus, updateNativeRecall, markNativeActivity, replanNativeInsertion, nativeInsertionPlan });
 })();
 
-const __ma_module_4 = (() => {
-  const { assertUniqueManagedIdentities, managedEntries } = __ma_module_3;
+const __ma_module_5 = (() => {
+  const { assertUniqueManagedIdentities, managedEntries } = __ma_module_4;
   const { MirrorAbyssError, clone, digest, errorText, fault, invariant, stableStringify } = __ma_module_0;
   const ensureWorldbook = (condition, message, code = 'CONTRACT') => invariant(condition, message, 'worldbook', code);
   
@@ -782,40 +992,103 @@ const __ma_module_4 = (() => {
         const draft = clone(before);
         const result = await mutate({
           data: draft,
-          createEntry: () => createNativeEntry(draft),
+          createEntry: () => {
+            return createNativeEntry(draft);
+          },
         });
         this.validateData(draft);
         const afterSerialized = stableStringify(draft);
         if (afterSerialized === beforeSerialized) return { changed: false, result, receipt: null, data: before };
         options?.validate?.();
         const receipt = buildReceipt(name, before, draft, options?.messageIndex);
-        await this.saveVerified(name, draft);
+        await this.persistWithLifecycle(name, draft, receipt, options?.validate);
         return { changed: true, result, receipt, data: draft };
       });
     }
   
-    async rollback(settings, receipt) {
+    async rollback(settings, receipt, options = {}) {
       ensureWorldbook(receipt?.worldbookName, '回滚记录不完整', 'RECEIPT');
       const name = await this.ensureBound(settings);
       ensureWorldbook(name === receipt.worldbookName, '回滚记录属于其他世界书', 'RECEIPT_BOOK');
-      return this.withLock(name, async () => {
-        const current = await this.readFreshData(name);
-        for (const change of receipt.changes) {
-          const raw = current.entries?.[change.uid];
-          ensureWorldbook(entryDigest(raw) === change.afterDigest, `UID ${change.uid} 已被后续操作修改，拒绝覆盖回滚`, 'ROLLBACK_CONFLICT');
-        }
-        const restored = clone(current);
-        for (const change of receipt.changes) {
-          if (change.before === null) delete restored.entries[change.uid];
-          else restored.entries[change.uid] = clone(change.before);
-        }
-        this.validateData(restored);
-        await this.saveVerified(name, restored);
-        return { changed: true };
-      });
+      return this.withLock(name, () => this.restoreReceiptVerified(name, receipt, options?.validate));
     }
   
-    async saveVerified(name, next) {
+    async restoreReceiptVerified(name, receipt, validate) {
+      validate?.();
+      const current = await this.readFreshData(name);
+      for (const change of receipt.changes) {
+        const raw = current.entries?.[change.uid];
+        ensureWorldbook(entryDigest(raw) === change.afterDigest, `UID ${change.uid} 已被后续操作修改，拒绝覆盖回滚`, 'ROLLBACK_CONFLICT');
+      }
+      const restored = clone(current);
+      for (const change of receipt.changes) {
+        if (change.before === null) delete restored.entries[change.uid];
+        else restored.entries[change.uid] = clone(change.before);
+      }
+      this.validateData(restored);
+      const rollbackReceipt = buildReceipt(name, current, restored, receipt.messageIndex);
+      await this.persistWithLifecycle(name, restored, rollbackReceipt, validate);
+      return { changed: true };
+    }
+  
+    async persistWithLifecycle(name, next, receipt, validate) {
+      validate?.();
+      try {
+        await this.saveVerified(name, next, false);
+      } catch (error) {
+        // saveVerified can only classify a failed authoritative reread as
+        // uncertain after the host save call has already run. Preserve the
+        // finite before-image receipt so upper layers can persist evidence and
+        // later attempt the same digest-protected rollback, never a blind retry.
+        if (error?.source === 'worldbook' && error?.code === 'COMMIT_UNCERTAIN') {
+          error.committed = true;
+          error.receipt = clone(receipt);
+        } else if (error?.source === 'worldbook' && error?.code === 'SAVE_FAILED') {
+          // The authoritative reread succeeded and did not contain the intended
+          // state, so this is a confirmed failed write rather than an uncertain
+          // commit. It remains safe for the caller to decide whether to retry.
+          error.committed = false;
+        }
+        throw error;
+      }
+      try {
+        // The source/chat can change while SillyTavern is awaiting the save.
+        // Recheck at the verified commit boundary and compensate inside this
+        // same per-book lock before the stale task can escape without a receipt.
+        validate?.();
+        await refreshHostViews(this.host.context(), name);
+        // Refreshing host views is also asynchronous. Validate once more before
+        // releasing the lock so no post-commit await can create an orphan write.
+        validate?.();
+      } catch (error) {
+        try {
+          await this.restoreReceiptVerified(name, receipt);
+        } catch (compensationError) {
+          const uncertain = fault(
+            'worldbook',
+            'COMMIT_UNCERTAIN',
+            '任务在世界书写入期间失效，且刚才的提交无法安全撤销；请刷新核对，不要重复执行同一任务',
+            compensationError,
+          );
+          uncertain.committed = true;
+          uncertain.receipt = clone(receipt);
+          uncertain.lifecycle = {
+            source: error?.source ?? '',
+            code: error?.code ?? '',
+            message: errorText(error),
+          };
+          throw uncertain;
+        }
+        if (error && typeof error === 'object') {
+          error.compensated = true;
+          error.committed = false;
+          error.receipt = clone(receipt);
+        }
+        throw error;
+      }
+    }
+  
+    async saveVerified(name, next, refresh = true) {
       const context = this.host.context();
       let saveError = null;
       try {
@@ -841,7 +1114,7 @@ const __ma_module_4 = (() => {
       // The commit boundary is the authoritative backend reread above. Host view
       // refresh is derived UI work and must never turn a persisted write into a
       // retryable failure without a receipt.
-      await refreshHostViews(context, name);
+      if (refresh) await refreshHostViews(context, name);
     }
   
     validateData(data) {
@@ -940,7 +1213,7 @@ const __ma_module_4 = (() => {
   return Object.freeze({ WorldbookRepository });
 })();
 
-const __ma_module_5 = (() => {
+const __ma_module_6 = (() => {
   const { unique } = __ma_module_0;
   const emptyLayout = () => ({ folders: [], assignments: {}, collapsed: [], entryOrder: [] });
   
@@ -1077,8 +1350,10 @@ const __ma_module_5 = (() => {
   return Object.freeze({ folderNameKey, normalizeFolderLayout, createOrReuseFolder, renameOrMergeFolder, deleteFolder, pruneFolderLayout, assignEntryFolder, setFolderCollapsed, moveFolderBy, moveEntryWithinFolder, pageFolderEntries });
 })();
 
-const __ma_module_6 = (() => {
-  const { unique } = __ma_module_0;
+const __ma_module_7 = (() => {
+  const { describeError, fault, unique } = __ma_module_0;
+  const TRANSIENT_PHASES = new Set(['audit', 'extract', 'small-summary', 'large-summary', 'import', 'worldbook']);
+  
   // Operational metadata coordinates tasks and rollback. It never duplicates worldbook facts.
   class OperationalState {
     constructor(host) { this.host = host; }
@@ -1087,7 +1362,7 @@ const __ma_module_6 = (() => {
   
     updateAfterWorldbook(result, mutator) {
       return this.host.updateState(state => {
-        appendReceipt(state, result?.receipt);
+        appendReceipt(state, result?.receipt, result);
         mutator(state);
       });
     }
@@ -1110,14 +1385,62 @@ const __ma_module_6 = (() => {
       return this.updateAfterWorldbook(result, state => { state.lastWrite = writeReceipt(result); });
     }
   
-    completeSummary(kind, operational, result) {
-      return this.updateAfterWorldbook(result, state => {
+    recordRecoveryReceipt(result, detail, origin = null) {
+      const write = origin ? this.originWriter(origin) : state => this.host.updateState(state);
+      return write(state => {
+        appendReceipt(state, result?.receipt, result, true);
+        state.status = {
+          phase: 'state-error', detail,
+          messageIndex: Number(result?.receipt?.messageIndex ?? -1), updated: Date.now(),
+        };
+      });
+    }
+  
+    recordCommittedReceiptFor(origin, result, detail) {
+      const write = this.originWriter(origin);
+      const tracked = withManualLineage(result);
+      const receipt = tracked?.receipt;
+      if (Number(receipt?.messageIndex) < 0 && !unique(receipt?.manualSourceMessageIndexes).length) {
+        return this.recordRecoveryReceipt(tracked, detail, origin);
+      }
+      return write(state => {
+        appendReceipt(state, receipt, tracked);
+        state.status = { phase: 'state-error', detail, messageIndex: Number(receipt?.messageIndex ?? -1), updated: Date.now() };
+      });
+    }
+  
+    originWriter(origin) {
+      const remote = typeof this.host.updateStateFor === 'function';
+      if (!remote && (this.host.chatKey() !== origin?.chatKey || (origin?.worldbookName && this.host.worldbookName() !== origin.worldbookName))) {
+        throw fault('host', 'METADATA_ORIGIN_API', '宿主不支持把恢复回执写回原聊天');
+      }
+      return remote ? mutator => this.host.updateStateFor(origin, mutator) : mutator => this.host.updateState(mutator);
+    }
+  
+    async trackCommittedUncertain(error, origin) {
+      const receipt = error?.receipt;
+      const detail = `世界书提交结果不确定；已保留事务回执，请人工刷新核对，禁止自动或盲目重试：${describeError(error)}`;
+      try {
+        await this.recordRecoveryReceipt({ changed: true, receipt, worldbookName: origin?.worldbookName }, detail, origin);
+        return { persisted: true, detail, receipt };
+      } catch (stateError) { return { persisted: false, detail, receipt, stateError }; }
+    }
+  
+    completeSummary(kind, { operational, selectedUids, result }) {
+      const tracked = withManualLineage(result);
+      return this.updateAfterWorldbook(tracked, state => {
         if (operational && kind === 'small') {
           state.summarizedGroups.push({ scene: state.currentScene || '当前场景', uids: unique(result.outputUids) });
           state.currentGroupUids = [];
           state.currentGroupFacts = 0;
         }
         if (operational && kind === 'large') state.summarizedGroups = [{ scene: '长期', uids: unique(result.outputUids) }];
+        if (!operational) {
+          const mappings = summaryUidMappings(selectedUids, result);
+          state.currentGroupUids = remapUidList(state.currentGroupUids, mappings);
+          state.closedGroups = remapSummaryGroups(state.closedGroups, mappings);
+          state.summarizedGroups = remapSummaryGroups(state.summarizedGroups, mappings);
+        }
       });
     }
   
@@ -1150,15 +1473,11 @@ const __ma_module_6 = (() => {
       return this.host.updateState(state => { state.receipts = state.receipts.filter(item => item.createdAt !== receipt.createdAt); });
     }
   
-    finishRollback(changedWorldbook, messageIndex) {
+    finishRollback(changedWorldbook, messageIndex, affectedUids = [], operationalBefore = null) {
       return this.host.updateState(state => {
         if (changedWorldbook) {
-          state.currentScene = '';
-          state.currentGroupUids = [];
-          state.currentGroupFacts = 0;
-          state.closedGroups = [];
-          state.summarizedGroups = [];
-          state.lastWrite = null;
+          if (validRollbackState(operationalBefore)) restoreRollbackState(state, operationalBefore);
+          else pruneLegacyRollbackState(state, affectedUids);
         }
         for (const key of Object.keys(state.messageStates)) if (Number(key) >= messageIndex) delete state.messageStates[key];
         state.status = {
@@ -1168,6 +1487,57 @@ const __ma_module_6 = (() => {
           updated: Date.now(),
         };
       });
+    }
+  
+    async rollbackReceipts({ memory, settings, receipts, messageIndex, token, validate, persist, isLifecycleAbort, onPartial }) {
+      const completed = [];
+      try {
+        for (const receipt of receipts) {
+          token.assertActive();
+          const result = await memory.rollback(settings, receipt, validate);
+          const committed = result?.changed === false ? result : { ...result, changed: true };
+          await persist(committed, () => this.removeReceipt(receipt));
+          completed.push(receipt);
+        }
+      } catch (error) {
+        if (completed.length && !isLifecycleAbort(error)) {
+          const boundary = Math.min(...completed.map(receipt => Number(receipt.messageIndex)));
+          await persist({ changed: true }, () => this.finishRollback(
+            true, boundary, createdReceiptUids(completed), earliestOperationalBefore(completed),
+          ));
+          onPartial?.();
+        }
+        throw error;
+      }
+      const finish = () => this.finishRollback(
+        receipts.length > 0, messageIndex, createdReceiptUids(receipts), earliestOperationalBefore(receipts),
+      );
+      if (receipts.length) await persist({ changed: true }, finish);
+      else await finish();
+    }
+  
+    async recoverCommittedAbort({ memory, settings, snapshot, result, lifecycleError, sameContext, postWriteError }) {
+      if (!sameContext) {
+        const tracked = withManualLineage(result);
+        lifecycleError.receipt = tracked.receipt;
+        const detail = `任务切换后世界书写入已经提交；已把有限回滚回执保存到原聊天，请返回原聊天核对：${describeError(lifecycleError)}`;
+        const origin = snapshot.stateOrigin ?? snapshot;
+        try { await this.recordCommittedReceiptFor(origin, tracked, detail); }
+        catch (stateError) {
+          lifecycleError.stateError = stateError;
+          throw postWriteError(stateError, tracked, origin);
+        }
+        throw lifecycleError;
+      }
+      try {
+        await memory.rollback(settings, result.receipt);
+        await this.finishRollback(true, snapshot.messageIndex);
+      } catch (rollbackError) {
+        const detail = `任务停止时事实已经提交，自动补偿回滚失败：${describeError(rollbackError)}；已保留事务回执，禁止重复提取`;
+        try { await this.recordRecoveryReceipt(result, detail); }
+        catch (stateError) { throw postWriteError(stateError); }
+        throw fault('worldbook', 'ABORT_ROLLBACK_FAILED', detail, rollbackError);
+      }
     }
   
     setMessageStage(index, stage, stateValue, detail) {
@@ -1182,6 +1552,13 @@ const __ma_module_6 = (() => {
     }
   
     setStatus(status) { return this.host.updateState(state => { state.status = status; }); }
+  
+    clearTransientStatus() {
+      if (!TRANSIENT_PHASES.has(this.state().status?.phase)) return Promise.resolve(this.state());
+      return this.host.updateState(state => {
+        if (TRANSIENT_PHASES.has(state.status?.phase)) state.status = { phase: 'idle', detail: '等待处理', messageIndex: -1, updated: Date.now() };
+      });
+    }
   
     reconcileUids(validUids, sceneNames) {
       return this.host.updateState(state => {
@@ -1203,11 +1580,27 @@ const __ma_module_6 = (() => {
     }
   }
   
-  function appendReceipt(state, receipt) {
-    if (!receipt || Number(receipt.messageIndex) < 0) return;
-    state.receipts.push(receipt);
-    const recent = [...new Set(state.receipts.map(item => Number(item.messageIndex)))].sort((a, b) => b - a).slice(0, 20);
-    state.receipts = state.receipts.filter(item => recent.includes(Number(item.messageIndex))).sort((a, b) => a.createdAt - b.createdAt);
+  function withManualLineage(result) {
+    if (!result?.receipt) return result;
+    const lineage = unique(result.sourceMessageIndexes);
+    return lineage.length ? { ...result, receipt: { ...result.receipt, manualSourceMessageIndexes: lineage } } : result;
+  }
+  
+  function appendReceipt(state, receipt, result, recovery = false) {
+    const manualLineage = unique(receipt?.manualSourceMessageIndexes);
+    if (!receipt || (!recovery && Number(receipt.messageIndex) < 0 && !manualLineage.length)) return;
+    const persisted = receipt.operationalBefore
+      ? { ...receipt, recovery: receipt.recovery === true || recovery }
+      : { ...receipt, operationalBefore: captureRollbackState(state, receipt, result) };
+    if (recovery) persisted.recovery = true;
+    state.receipts = state.receipts.filter(item => Number(item.createdAt) !== Number(persisted.createdAt));
+    state.receipts.push(persisted);
+    const recoveries = state.receipts.filter(item => item.recovery === true).slice(-12);
+    const manuals = state.receipts.filter(item => item.recovery !== true && unique(item.manualSourceMessageIndexes).length).slice(-12);
+    const regular = state.receipts.filter(item => item.recovery !== true && !unique(item.manualSourceMessageIndexes).length);
+    const recent = [...new Set(regular.map(item => Number(item.messageIndex)))].sort((a, b) => b - a).slice(0, 20);
+    state.receipts = [...regular.filter(item => recent.includes(Number(item.messageIndex))), ...manuals, ...recoveries]
+      .sort((a, b) => a.createdAt - b.createdAt);
   }
   
   function writeReceipt(result) {
@@ -1222,10 +1615,186 @@ const __ma_module_6 = (() => {
   
   function summaryFailureKey(kind, uids) { return `${kind}:${unique(uids).sort().join(',')}`; }
   function reconcileGroups(groups, retain) { return (groups ?? []).map(group => ({ ...group, uids: retain(group.uids) })).filter(group => group.uids.length); }
+  
+  function summaryUidMappings(selectedUids, result) {
+    const explicit = (result?.uidMappings ?? []).map(mapping => ({
+      sourceUids: unique(mapping?.sourceUids),
+      outputUids: unique(mapping?.outputUids),
+    })).filter(mapping => mapping.sourceUids.length && mapping.outputUids.length && !sameUidSet(mapping.sourceUids, mapping.outputUids));
+    if (explicit.length) return explicit;
+    const sourceUids = unique(selectedUids);
+    const outputUids = unique(result?.outputUids);
+    return sourceUids.length && outputUids.length && !sameUidSet(sourceUids, outputUids) ? [{ sourceUids, outputUids }] : [];
+  }
+  
+  function sameUidSet(left, right) {
+    return left.length === right.length && left.every(uid => right.includes(uid));
+  }
+  
+  function remapUidList(values, mappings) {
+    let next = unique(values);
+    for (const mapping of mappings) {
+      const sources = new Set(mapping.sourceUids);
+      if (!next.some(uid => sources.has(uid))) continue;
+      next = unique([...next.filter(uid => !sources.has(uid)), ...mapping.outputUids]);
+    }
+    return next;
+  }
+  
+  function remapSummaryGroups(groups, mappings) {
+    const next = (groups ?? []).map(group => ({ ...group, uids: unique(group.uids) }));
+    for (const mapping of mappings) {
+      const sources = new Set(mapping.sourceUids);
+      const touched = [];
+      for (let index = 0; index < next.length; index += 1) {
+        if (!next[index].uids.some(uid => sources.has(uid))) continue;
+        touched.push(index);
+        next[index].uids = next[index].uids.filter(uid => !sources.has(uid));
+      }
+      if (touched.length) {
+        const target = touched.at(-1);
+        next[target].uids = unique([...next[target].uids, ...mapping.outputUids]);
+      }
+    }
+    return next.filter(group => group.uids.length);
+  }
+  
+  function removeGroupUids(groups, removed) {
+    return (groups ?? []).map(group => ({
+      ...group,
+      uids: unique(group.uids).filter(uid => !removed.has(uid)),
+    })).filter(group => group.uids.length);
+  }
+  
+  function captureRollbackState(state, receipt, result) {
+    const changedUids = (receipt?.changes ?? []).map(change => String(change?.uid ?? '')).filter(Boolean);
+    const scopeUids = unique([
+      ...changedUids,
+      ...(result?.touchedUids ?? []),
+      ...(result?.outputUids ?? []),
+      ...(result?.absorbedUids ?? []),
+    ]);
+    const sceneTransition = Boolean(result?.currentScene)
+      && String(result.currentScene) !== String(state.currentScene ?? '');
+    if (sceneTransition) scopeUids.push(...unique(state.currentGroupUids));
+    return {
+      scopeUids: unique(scopeUids),
+      restoreCurrent: sceneTransition || Number(result?.factCount || 0) > 0,
+      currentScene: String(state.currentScene ?? ''),
+      currentGroupUids: unique(state.currentGroupUids),
+      currentGroupFacts: Number(state.currentGroupFacts || 0),
+      closedGroups: copyGroups(state.closedGroups),
+      summarizedGroups: copyGroups(state.summarizedGroups),
+      summaryFailures: (state.summaryFailures ?? []).map(item => ({ ...item, uids: unique(item.uids) })),
+      lastWrite: state.lastWrite ? { ...state.lastWrite, touchedUids: unique(state.lastWrite.touchedUids) } : null,
+    };
+  }
+  
+  function validRollbackState(value) {
+    return value && typeof value === 'object'
+      && Array.isArray(value.currentGroupUids)
+      && Array.isArray(value.closedGroups)
+      && Array.isArray(value.summarizedGroups);
+  }
+  
+  function restoreRollbackState(state, previous) {
+    const scope = new Set(unique(previous.scopeUids));
+    if (!scope.size) {
+      state.currentScene = String(previous.currentScene ?? '');
+      state.currentGroupUids = unique(previous.currentGroupUids);
+      state.currentGroupFacts = Number(previous.currentGroupFacts || 0);
+      state.closedGroups = copyGroups(previous.closedGroups);
+      state.summarizedGroups = copyGroups(previous.summarizedGroups);
+      state.summaryFailures = copyFailures(previous.summaryFailures);
+      state.lastWrite = copyLastWrite(previous.lastWrite);
+      return;
+    }
+    state.currentGroupUids = mergeScopedUidList(state.currentGroupUids, previous.currentGroupUids, scope);
+    if (previous.restoreCurrent) {
+      state.currentScene = String(previous.currentScene ?? '');
+      state.currentGroupFacts = Number(previous.currentGroupFacts || 0);
+    }
+    state.closedGroups = mergeScopedGroups(state.closedGroups, previous.closedGroups, scope);
+    state.summarizedGroups = mergeScopedGroups(state.summarizedGroups, previous.summarizedGroups, scope);
+    state.summaryFailures = mergeScopedFailures(state.summaryFailures, previous.summaryFailures, scope);
+    const currentLastWriteTouchesScope = unique(state.lastWrite?.touchedUids).some(uid => scope.has(uid));
+    if (currentLastWriteTouchesScope) state.lastWrite = copyLastWrite(previous.lastWrite);
+  }
+  
+  function pruneLegacyRollbackState(state, affectedUids) {
+    const affected = new Set(unique(affectedUids));
+    if (!affected.size) return;
+    const previousCurrent = unique(state.currentGroupUids);
+    state.currentGroupUids = previousCurrent.filter(uid => !affected.has(uid));
+    if (state.currentGroupUids.length !== previousCurrent.length) state.currentGroupFacts = 0;
+    if (previousCurrent.length && !state.currentGroupUids.length) state.currentScene = '';
+    state.closedGroups = removeGroupUids(state.closedGroups, affected);
+    state.summarizedGroups = removeGroupUids(state.summarizedGroups, affected);
+    state.summaryFailures = state.summaryFailures.map(item => {
+      const uids = unique(item.uids).filter(uid => !affected.has(uid));
+      return { ...item, uids, key: summaryFailureKey(item.kind, uids) };
+    }).filter(item => item.uids.length);
+    if (state.lastWrite) {
+      const touchedUids = unique(state.lastWrite.touchedUids).filter(uid => !affected.has(uid));
+      state.lastWrite = touchedUids.length ? { ...state.lastWrite, touchedUids } : null;
+    }
+  }
+  
+  function copyGroups(groups) {
+    return (groups ?? []).map(group => ({ ...group, uids: unique(group.uids) }));
+  }
+  
+  function copyFailures(failures) {
+    return (failures ?? []).map(item => ({ ...item, uids: unique(item.uids) }));
+  }
+  
+  function copyLastWrite(value) {
+    return value ? { ...value, touchedUids: unique(value.touchedUids) } : null;
+  }
+  
+  function mergeScopedUidList(current, previous, scope) {
+    const retained = unique(current).filter(uid => !scope.has(uid));
+    const restored = unique(previous).filter(uid => scope.has(uid));
+    const available = new Set([...retained, ...restored]);
+    const baselineOrder = unique(previous).filter(uid => available.has(uid));
+    const laterUnrelated = retained.filter(uid => !baselineOrder.includes(uid));
+    return unique([...baselineOrder, ...laterUnrelated]);
+  }
+  
+  function mergeScopedGroups(currentGroups, previousGroups, scope) {
+    const next = copyGroups(currentGroups).map(group => ({
+      ...group,
+      uids: group.uids.filter(uid => !scope.has(uid)),
+    })).filter(group => group.uids.length);
+    for (const [index, previous] of copyGroups(previousGroups).entries()) {
+      const restored = previous.uids.filter(uid => scope.has(uid));
+      if (!restored.length) continue;
+      const target = next.find(group => group.scene === previous.scene);
+      if (target) target.uids = mergeScopedUidList(target.uids, previous.uids, scope);
+      else next.splice(Math.min(index, next.length), 0, { ...previous, uids: restored });
+    }
+    return next;
+  }
+  
+  function mergeScopedFailures(currentFailures, previousFailures, scope) {
+    const retained = copyFailures(currentFailures).filter(item => !item.uids.some(uid => scope.has(uid)));
+    const restored = copyFailures(previousFailures).filter(item => item.uids.some(uid => scope.has(uid)));
+    return [...retained, ...restored];
+  }
+  
+  function createdReceiptUids(receipts) {
+    return unique(receipts.flatMap(receipt => (receipt.changes ?? [])
+      .filter(change => change?.before === null)
+      .map(change => String(change.uid ?? '')).filter(Boolean)));
+  }
+  
+  function earliestOperationalBefore(receipts) {
+    return [...receipts].sort((left, right) => Number(left.createdAt) - Number(right.createdAt))[0]?.operationalBefore ?? null;
+  }
   return Object.freeze({ OperationalState, summaryFailureKey });
 })();
 
-const __ma_module_7 = (() => {
+const __ma_module_8 = (() => {
   const { CancellationToken, fault } = __ma_module_0;
   class TaskQueue extends EventTarget {
     constructor() {
@@ -1284,11 +1853,11 @@ const __ma_module_7 = (() => {
   return Object.freeze({ TaskQueue });
 })();
 
-const __ma_module_8 = (() => {
-  const { pruneFolderLayout } = __ma_module_5;
+const __ma_module_9 = (() => {
+  const { pruneFolderLayout } = __ma_module_6;
   const { describeError, fault, invariant, unique } = __ma_module_0;
-  const { OperationalState, summaryFailureKey } = __ma_module_6;
-  const { TaskQueue } = __ma_module_7;
+  const { OperationalState, summaryFailureKey } = __ma_module_7;
+  const { TaskQueue } = __ma_module_8;
   const ensureWorkflow = (condition, message, code = 'WORKFLOW') => invariant(condition, message, 'workflow', code);
   const PRIORITY = Object.freeze({ rollback: 100, manual: 70, automatic: 40, small: 30, large: 10 });
   class MirrorAbyssController extends EventTarget {
@@ -1322,31 +1891,27 @@ const __ma_module_8 = (() => {
     start() {
       this.refreshMessageSequence();
       const events = this.host.eventTypes();
-      const handlers = {
-        MESSAGE_RECEIVED: messageId => {
-          this.refreshMessageSequence();
-          return this.scheduleAutomatic(this.host.messageIndex(messageId));
-        },
-        MESSAGE_EDITED: value => {
+      if (events.MESSAGE_RECEIVED) this.unsubscribers.push(this.host.subscribe(events.MESSAGE_RECEIVED, messageId => {
+        this.refreshMessageSequence(); return this.scheduleAutomatic(this.host.messageIndex(messageId));
+      }));
+      if (events.MESSAGE_EDITED) {
+        this.unsubscribers.push(this.host.subscribe(events.MESSAGE_EDITED, value => {
           const index = this.host.messageIndex(value);
-          this.refreshMessageSequence();
-          return this.handleSourceMessageChanged(index, this.host.isAssistantMessage(index));
-        },
-        MESSAGE_SWIPED: value => {
-          const index = this.host.messageIndex(value);
-          this.refreshMessageSequence();
-          return this.handleSourceMessageChanged(index, !this.host.isPendingSwipe(index));
-        },
-        MESSAGE_DELETED: () => this.handleMessagesDeleted(),
-        CHAT_CHANGED: () => this.onChatChanged(),
-        GENERATION_STARTED: () => this.onGenerationStarted(),
-        WORLD_INFO_ACTIVATED: entries => this.onWorldInfoActivated(entries),
-        WORLDINFO_UPDATED: name => this.handleWorldbookUpdated(name),
-      };
-      for (const [name, handler] of Object.entries(handlers)) {
-        ensureWorkflow(events[name], `宿主未提供事件 ${name}`, 'EVENT_API');
-        this.unsubscribers.push(this.host.subscribe(events[name], handler));
+          const reprocess = this.host.isAssistantMessage(index);
+          this.refreshMessageSequence(); return this.handleSourceMessageChanged(index, reprocess);
+        }));
       }
+      if (events.MESSAGE_SWIPED) {
+        this.unsubscribers.push(this.host.subscribe(events.MESSAGE_SWIPED, value => {
+          const index = this.host.messageIndex(value);
+          this.refreshMessageSequence(); return this.handleSourceMessageChanged(index, !this.host.isPendingSwipe(index));
+        }));
+      }
+      if (events.MESSAGE_DELETED) this.unsubscribers.push(this.host.subscribe(events.MESSAGE_DELETED, () => this.handleMessagesDeleted()));
+      if (events.CHAT_CHANGED) this.unsubscribers.push(this.host.subscribe(events.CHAT_CHANGED, () => this.onChatChanged()));
+      if (events.GENERATION_STARTED) this.unsubscribers.push(this.host.subscribe(events.GENERATION_STARTED, () => this.onGenerationStarted()));
+      if (events.WORLD_INFO_ACTIVATED) this.unsubscribers.push(this.host.subscribe(events.WORLD_INFO_ACTIVATED, entries => this.onWorldInfoActivated(entries)));
+      if (events.WORLDINFO_UPDATED) this.unsubscribers.push(this.host.subscribe(events.WORLDINFO_UPDATED, name => this.handleWorldbookUpdated(name)));
     }
     stop() {
       this.cancel('插件已停止', false);
@@ -1363,7 +1928,7 @@ const __ma_module_8 = (() => {
         this.autoTimer = 0;
         const settings = this.settings();
         if (settings.enabled && ((settings.autoAudit && String(settings.auditPrompt ?? '').trim()) || settings.autoExtraction)) {
-          void this.process('full', true, messageIndex).catch(() => undefined);
+          void this.process('full', true, messageIndex).catch(error => { if (isCommittedFailure(error)) this.warnCommittedFailure(error); });
         }
       }, 220);
     }
@@ -1371,13 +1936,14 @@ const __ma_module_8 = (() => {
       clearTimeout(this.autoTimer);
       this.autoTimer = 0;
       this.cancel('聊天已经切换', false);
-      this.lastFailedTask = null;
+      if (!this.lastFailedTask?.uncertain) this.lastFailedTask = null;
       this.activatedWorldInfoUids.clear();
       this.pendingWorldbookUpdate = '';
       this.failedAutomaticSummaryKeys.clear();
       this.refreshMessageSequence();
       this.importer.clear();
       this.migration.clear();
+      void this.operational.clearTransientStatus().catch(error => console.error('[Mirror Abyss]', describeError(error), error));
       this.emit('refresh');
     }
     refreshMessageSequence() { this.messageSequence = this.host.messageDigests(); this.messageSequenceReady = true; }
@@ -1445,6 +2011,7 @@ const __ma_module_8 = (() => {
       const failed = this.lastFailedTask;
       ensureWorkflow(failed, '没有可重试的失败任务', 'RETRY_EMPTY');
       ensureWorkflow(failed.chatKey === this.host.chatKey() && failed.worldbookName === this.host.worldbookName(), '失败任务所属聊天或世界书已经变化', 'RETRY_CONTEXT');
+      ensureWorkflow(failed.uncertain !== true && typeof failed.action === 'function', '该任务的世界书提交结果不确定，必须先人工刷新核对，禁止盲目重试', 'COMMIT_UNCERTAIN');
       const result = await failed.action();
       if (this.lastFailedTask === failed) this.lastFailedTask = null;
       return result;
@@ -1480,9 +2047,9 @@ const __ma_module_8 = (() => {
         this.setStatus('extract', '正在提取世界事实', snapshot.messageIndex);
         try {
           extracted = await this.memory.extract(settings, snapshot, progress);
-          this.assertTaskContext(snapshot);
-          await this.recordExtraction(extracted);
+          await this.settleWorldbookResult(settings, snapshot, extracted, () => this.recordExtraction(extracted));
         } catch (error) {
+          if (isCommittedUncertain(error)) throw error;
           this.rethrowLifecycleAbort(error, snapshot);
           await progress('extract', 'error', describeError(error));
           if (error?.source === 'worldbook') await progress('write', 'error', describeError(error));
@@ -1515,11 +2082,8 @@ const __ma_module_8 = (() => {
         selected = kind === 'large' ? unique(state.summarizedGroups.flatMap(group => group.uids)) : unique(state.currentGroupUids);
       }
       ensureWorkflow(selected.length, '当前没有可总结条目', 'SUMMARY_EMPTY');
-      this.setStatus(kind === 'large' ? 'large-summary' : 'small-summary', kind === 'merge' ? '正在手动合并' : `正在${kind === 'large' ? '大' : '小'}总结`);
       const result = await this.memory.summarize(kind, settings, snapshot, selected, requirement);
-      this.assertTaskContext(snapshot);
-      await this.persistStateTaskAfterWorldbook(result, () => this.operational.completeSummary(kind, operational, result));
-      this.assertTaskContext(snapshot);
+      await this.settleWorldbookResult(settings, snapshot, result, () => this.operational.completeSummary(kind, { operational, selectedUids: selected, result }));
       this.failedAutomaticSummaryKeys.delete(summaryFailureKey(kind, selected));
       await this.setStatus('complete', '整理完成');
       this.emit('refresh');
@@ -1541,9 +2105,7 @@ const __ma_module_8 = (() => {
         const snapshot = this.host.captureChat(token);
         this.setStatus('worldbook', '正在写入世界设定');
         const result = await this.importer.commit(this.settings(), snapshot);
-        this.assertTaskContext(snapshot);
-        await this.recordLastWrite(result);
-        this.assertTaskContext(snapshot);
+        await this.settleWorldbookResult(this.settings(), snapshot, result, () => this.operational.recordLastWrite(result));
         await this.setStatus('complete', `${writeStatus(result)} · 导入条目均为基石只读`);
         this.emit('refresh');
         return result;
@@ -1553,18 +2115,18 @@ const __ma_module_8 = (() => {
     clearImportPreview() { this.importer.clear(); this.emit('import-preview', null); }
     listEntries() { return this.memory.listEntries(this.settings()); }
     overview() { return this.memory.overview(this.settings()); }
-    gameTime() { return this.memory.gameTime(this.settings()); }
-    updateEntry(uid, content) { return this.mutation(`entry:update:${uid}`, `更新UID ${uid}`, () => this.memory.updateEntry(this.settings(), uid, content)); }
-    updateRecall(uid, recall) { return this.mutation(`entry:recall:${uid}`, `更新UID ${uid}召回设置`, () => this.memory.updateRecall(this.settings(), uid, recall)); }
-    setCornerstone(uids, locked) { return this.mutation(`cornerstone:${unique(uids).sort()}:${locked}`, `${locked ? '设置' : '解除'}基石`, () => this.memory.setCornerstone(this.settings(), uids, locked)); }
-    setFocus(uid, focused) { return this.mutation(`focus:${uid}:${focused}`, `${focused ? '设置' : '解除'}主焦点`, () => this.memory.setFocus(this.settings(), uid, focused)); }
-    deleteEntries(uids) { return this.mutation(`entry:delete:${unique(uids).sort()}`, `删除${uids.length}个条目`, () => this.memory.deleteEntries(this.settings(), uids)); }
-    replanInsertion() { return this.mutation('insertion:replan', '校准世界书原生插入顺序', () => this.memory.replanInsertion(this.settings())); }
-    setGameTime(value) { return this.mutation('game-time', '设置游戏时间', () => this.memory.setGameTime(this.settings(), value)); }
+    gameTime() { return this.listEntries().then(opened => opened.managed.find(entry => entry.type === '世界' && entry.name === '游戏时间')?.content.match(/当前游戏时间：(.+)/u)?.[1] ?? ''); }
+    updateEntry(uid, content) { return this.mutation(`entry:update:${uid}`, `更新UID ${uid}`, validate => this.memory.updateEntry(this.settings(), uid, content, validate)); }
+    updateRecall(uid, recall) { return this.mutation(`entry:recall:${uid}`, `更新UID ${uid}召回设置`, validate => this.memory.updateRecall(this.settings(), uid, recall, validate)); }
+    setCornerstone(uids, locked) { return this.mutation(`cornerstone:${unique(uids).sort()}:${locked}`, `${locked ? '设置' : '解除'}基石`, validate => this.memory.setCornerstone(this.settings(), uids, locked, validate)); }
+    setFocus(uid, focused) { return this.mutation(`focus:${uid}:${focused}`, `${focused ? '设置' : '解除'}主焦点`, validate => this.memory.setFocus(this.settings(), uid, focused, validate)); }
+    deleteEntries(uids) { return this.mutation(`entry:delete:${unique(uids).sort()}`, `删除${uids.length}个条目`, validate => this.memory.deleteEntries(this.settings(), uids, validate)); }
+    replanInsertion() { return this.mutation('insertion:replan', '校准世界书原生插入顺序', validate => this.memory.replanInsertion(this.settings(), validate)); }
+    setGameTime(value) { return this.mutation('game-time', '设置游戏时间', validate => this.memory.setGameTime(this.settings(), value, validate)); }
     migrationPreview() { return this.migration.previewValue(); }
     scanMigration() { return this.migration.scan(this.settings()).then(value => { this.emit('refresh'); return value; }); }
-    commitMigration() { return this.mutation('migration:commit', '迁移当前模板条目', () => this.migration.commit(this.settings())); }
-    undoMigration() { return this.mutation('migration:undo', '撤销条目迁移', () => this.migration.undo(this.settings())); }
+    commitMigration() { return this.mutation('migration:commit', '迁移当前模板条目', validate => this.migration.commit(this.settings(), validate)); }
+    undoMigration() { return this.mutation('migration:undo', '撤销条目迁移', validate => this.migration.undo(this.settings(), validate)); }
     testApi() {
       return this.enqueue('diagnostic:model', '测试模型连接', PRIORITY.manual, async token => {
         return this.memory.testConnection(this.settings(), token);
@@ -1572,9 +2134,9 @@ const __ma_module_8 = (() => {
     }
     runAcceptance() {
       return this.enqueue('diagnostic:acceptance', '三轮完整验收', PRIORITY.manual, async token => {
-        token.assertActive();
-        const report = await this.diagnostics.run(this.settings(), { rounds: 3, includeModel: true }, token);
-        token.assertActive();
+        const snapshot = this.host.captureChat(token);
+        const report = await this.diagnostics.run(this.settings(), snapshot, { rounds: 3, includeModel: true });
+        this.assertTaskContext(snapshot);
         return report;
       });
     }
@@ -1582,17 +2144,14 @@ const __ma_module_8 = (() => {
     async rollbackFrom(messageIndex, reprocess) {
       return this.enqueue(`rollback:${messageIndex}`, '回滚源消息写入', PRIORITY.rollback, async token => {
         const settings = this.settings();
+        const snapshot = this.host.captureChat(token); const validate = () => this.assertTaskContext(snapshot);
         const state = this.operational.state();
-        const receipts = state.receipts.filter(receipt => Number(receipt.messageIndex) >= messageIndex).sort((a, b) => b.createdAt - a.createdAt);
-        for (const receipt of receipts) {
-          token.assertActive();
-          const result = await this.memory.rollback(settings, receipt);
-          const committed = result?.changed === false ? result : { ...result, changed: true };
-          await this.persistStateTaskAfterWorldbook(committed, () => this.operational.removeReceipt(receipt));
-        }
-        const finish = () => this.operational.finishRollback(receipts.length > 0, messageIndex);
-        if (receipts.length) await this.persistStateTaskAfterWorldbook({ changed: true }, finish);
-        else await finish();
+        const receipts = state.receipts.filter(receipt => receipt.recovery !== true && receiptAffectsMessage(receipt, messageIndex)).sort((a, b) => b.createdAt - a.createdAt);
+        await this.operational.rollbackReceipts({
+          memory: this.memory, settings, receipts, messageIndex, token, validate, isLifecycleAbort,
+          persist: (result, task) => this.persistStateTaskAfterWorldbook(result, task),
+          onPartial: () => this.emit('refresh'),
+        });
         if (reprocess && settings.enabled && (settings.autoAudit || settings.autoExtraction)) await this.processMessage('full', true, messageIndex, token);
         this.emit('refresh');
       });
@@ -1600,11 +2159,12 @@ const __ma_module_8 = (() => {
     retrySummaryFailure(id) {
       const failure = this.operational.state().summaryFailures.find(item => item.id === id);
       ensureWorkflow(failure, '该失败整理任务已经不存在', 'SUMMARY_FAILURE');
+      const origin = this.host.captureStateOrigin?.() ?? { chatKey: this.host.chatKey(), worldbookName: this.host.worldbookName() };
       return this.summarize(failure.kind, failure.uids).then(async result => {
         try {
           await this.operational.removeSummaryFailure(id);
         } catch (error) {
-          if (result?.changed) throw postWriteStateError(error);
+          if (result?.changed) throw postWriteStateError(error, result, origin);
           throw error;
         }
         this.failedAutomaticSummaryKeys.delete(failure.key);
@@ -1615,10 +2175,10 @@ const __ma_module_8 = (() => {
     async resetAll() {
       this.cancel('正在重置插件');
       return this.enqueue('reset:all', '重置镜渊', PRIORITY.manual, async token => {
-        token.assertActive();
-        const transaction = await this.memory.clearManaged(this.settings());
+        const snapshot = this.host.captureChat(token); this.assertTaskContext(snapshot);
+        const transaction = await this.memory.clearManaged(this.settings(), () => this.assertTaskContext(snapshot));
         try {
-          token.assertActive();
+          this.assertTaskContext(snapshot);
           await this.host.clearState();
           this.settingsStore.reset();
         } catch (error) {
@@ -1631,20 +2191,23 @@ const __ma_module_8 = (() => {
         this.emit('refresh');
       });
     }
-    async recordExtraction(result) {
-      if (!result?.changed && !result?.receipt && !Number(result?.factCount || 0)) return;
-      await this.persistStateTaskAfterWorldbook(result, () => this.operational.recordExtraction(result));
+    async recordExtraction(result) { if (result?.changed || result?.receipt || Number(result?.factCount || 0)) await this.operational.recordExtraction(result); }
+    async settleWorldbookResult(settings, snapshot, result, task) {
+      try { this.assertTaskContext(snapshot); await this.persistStateTaskAfterWorldbook(result, task, snapshot.stateOrigin ?? snapshot); this.assertTaskContext(snapshot); }
+      catch (error) {
+        if (result?.receipt && isLifecycleAbort(error)) await this.operational.recoverCommittedAbort({
+          memory: this.memory, settings, snapshot, result, lifecycleError: error, postWriteError: postWriteStateError,
+          sameContext: sameTaskContext(this.host, snapshot.chatKey, snapshot.worldbookName),
+        });
+        throw error;
+      }
     }
-    async recordLastWrite(result) {
-      if (!result?.changed && !result?.receipt) return;
-      await this.persistStateTaskAfterWorldbook(result, () => this.operational.recordLastWrite(result));
-    }
-    async persistStateTaskAfterWorldbook(result, task) {
+    async persistStateTaskAfterWorldbook(result, task, origin) {
       try {
         return await task();
       } catch (error) {
         if (isLifecycleAbort(error)) throw error;
-        if (result?.changed || result?.receipt) throw postWriteStateError(error);
+        if (result?.changed || result?.receipt) throw postWriteStateError(error, result, origin);
         throw error;
       }
     }
@@ -1652,73 +2215,74 @@ const __ma_module_8 = (() => {
       const state = this.operational.state();
       if (settings.autoSmallSummary && state.closedGroups.length) {
         const group = state.closedGroups[0];
-        const ran = await this.runAutomaticSummary('small', settings, snapshot, group.uids, {
-          group,
-          failureKey: summaryFailureKey('small', group.uids),
-          scene: group.scene,
+        const completedSmall = await this.runAutomaticSummaryBatch({
+          kind: 'small', settings, snapshot, uids: group.uids, group,
         });
-        if (ran) return;
+        if (completedSmall) return;
       }
       const refreshed = this.operational.state();
-      if (settings.autoLargeSummary && refreshed.summarizedGroups.length >= settings.largeSummaryGroups) {
+      if (settings.autoLargeSummary && refreshed.summarizedGroups.length > settings.largeSummaryGroups) {
         const groups = refreshed.summarizedGroups.slice(0, settings.largeSummaryGroups);
         const uids = unique(groups.flatMap(group => group.uids));
-        await this.runAutomaticSummary('large', settings, snapshot, uids, {
-          limit: settings.largeSummaryGroups,
-          failureKey: summaryFailureKey('large', uids),
-          scene: '长期',
+        await this.runAutomaticSummaryBatch({
+          kind: 'large', settings, snapshot, uids, limit: settings.largeSummaryGroups,
         });
       }
     }
-  
-    async runAutomaticSummary(kind, settings, snapshot, uids, completion) {
-      const key = completion.failureKey;
-      if (this.summaryBatchBlocked(key)) return false;
+    async runAutomaticSummaryBatch({ kind, settings, snapshot, uids, group, limit }) {
+      const key = summaryFailureKey(kind, uids); const state = this.operational.state();
+      if (state.receipts.some(receipt => receipt.recovery === true && receipt.automaticSummaryKey === key)
+        || this.lastFailedTask?.receipt?.automaticSummaryKey === key || this.failedAutomaticSummaryKeys.has(key) || state.summaryFailures.some(item => item.key === key)) return false;
       try {
-        const result = await this.memory.summarize(kind, settings, snapshot, uids);
-        this.assertTaskContext(snapshot);
-        await this.persistStateTaskAfterWorldbook(result, () => this.operational.completeAutomaticSummary(kind, { ...completion, result }));
-        this.assertTaskContext(snapshot);
+        const result = tagAutomaticSummaryOutcome(await this.memory.summarize(kind, settings, snapshot, uids), key);
+        await this.settleWorldbookResult(settings, snapshot, result, () => this.operational.completeAutomaticSummary(kind, { group, limit, result, failureKey: key }));
         this.failedAutomaticSummaryKeys.delete(key);
         return true;
       } catch (error) {
-        this.rethrowLifecycleAbort(error, snapshot);
+        tagAutomaticSummaryOutcome(error, key);
+        const committed = isCommittedFailure(error);
+        if (committed && (snapshot.token.cancelled || !sameTaskContext(this.host, snapshot.chatKey, snapshot.worldbookName))) throw error;
+        if (!committed) this.rethrowLifecycleAbort(error, snapshot);
         if (['POST_WRITE_STATE', 'COMMIT_UNCERTAIN'].includes(error?.code)) {
-          this.failedAutomaticSummaryKeys.add(key);
-          await this.setStatus('state-error', error?.code === 'COMMIT_UNCERTAIN'
-            ? `整理提交结果不确定；请刷新确认，不要重复执行：${describeError(error)}`
-            : `整理已落盘，运行状态保存失败；请刷新同步：${describeError(error)}`, snapshot.messageIndex);
+          if (committed) await this.trackCommittedFailure(error, snapshot.stateOrigin ?? snapshot, key);
+          else this.failedAutomaticSummaryKeys.add(key);
+          await this.setStatus('state-error', error?.code === 'COMMIT_UNCERTAIN' ? `整理提交结果不确定；请刷新确认，不要重复执行：${describeError(error)}` : `整理已落盘，运行状态保存失败；请刷新同步：${describeError(error)}`, snapshot.messageIndex);
         } else {
-          const persistenceError = await this.recordSummaryFailure(kind, completion.scene, uids, error);
+          const scene = kind === 'small' ? group.scene : '长期';
+          let persistenceError = null;
+          this.failedAutomaticSummaryKeys.add(key);
+          try { await this.operational.recordSummaryFailure(kind, scene, uids, describeError(error)); }
+          catch (stateError) { persistenceError = stateError; }
           this.assertTaskContext(snapshot);
-          await this.setStatus('summary-error', summaryFailureStatus(kind === 'large' ? '大' : '小', error, persistenceError), snapshot.messageIndex);
+          const detail = `事实更新成功；${kind === 'small' ? '小' : '大'}总结失败：${describeError(error)}${persistenceError ? `；失败记录保存异常：${describeError(persistenceError)}` : ''}`;
+          await this.setStatus('summary-error', detail, snapshot.messageIndex);
         }
         return false;
       }
     }
-    async recordSummaryFailure(kind, scene, uids, error) {
-      const key = summaryFailureKey(kind, uids);
-      this.failedAutomaticSummaryKeys.add(key);
-      try {
-        await this.operational.recordSummaryFailure(kind, scene, uids, describeError(error));
-        return null;
-      } catch (persistenceError) {
-        return persistenceError;
+    async trackCommittedFailure(error, origin, key) {
+      let tracked = { persisted: false, receipt: error.receipt };
+      if (isCommittedUncertain(error)) {
+        tracked = await this.operational.trackCommittedUncertain(error, origin);
+        if (tracked.stateError) error.stateError = tracked.stateError;
       }
+      if (!tracked.persisted) {
+        const source = error.origin ?? origin;
+        this.lastFailedTask = { key, chatKey: source?.chatKey, worldbookName: source?.worldbookName, origin: source, action: null, uncertain: true, retryable: false, receipt: error.receipt };
+        if (tracked.receipt?.automaticSummaryKey) this.failedAutomaticSummaryKeys.add(tracked.receipt.automaticSummaryKey);
+      }
+      return tracked;
     }
-    summaryBatchBlocked(key, state = this.operational.state()) {
-      return this.failedAutomaticSummaryKeys.has(key) || state.summaryFailures.some(item => item.key === key);
-    }
+    warnCommittedFailure(error) { const detail = `世界书已提交，但恢复链需要人工核对；禁止重试：${describeError(error)}`; console.error('[Mirror Abyss]', detail, error); this.emit('status', { phase: 'state-error', detail, messageIndex: -1, updated: Date.now() }); }
     setMessageStage(index, stage, stateValue, detail) {
-      const saved = this.operational.setMessageStage(index, stage, stateValue, detail)
-        .catch(error => console.error('[Mirror Abyss]', describeError(error), error));
+      const saved = this.operational.setMessageStage(index, stage, stateValue, detail).catch(error => console.error('[Mirror Abyss]', describeError(error), error));
       this.emit('status'); return saved;
     }
     mutation(key, label, task) {
       return this.enqueue(key, label, PRIORITY.manual, async token => {
         token.assertActive();
-        const result = await task();
-        token.assertActive();
+        const snapshot = this.host.captureChat(token); const validate = () => this.assertTaskContext(snapshot);
+        const result = await task(validate); await this.settleWorldbookResult(this.settings(), snapshot, result, async () => undefined);
         await this.setStatus('complete', `${label}完成并通过权威回读`);
         this.emit('refresh');
         return result;
@@ -1727,12 +2291,14 @@ const __ma_module_8 = (() => {
     enqueue(key, label, priority, run, retry = null) {
       const chatKey = this.host.chatKey();
       const worldbookName = this.host.worldbookName();
+      const origin = this.host.captureStateOrigin?.() ?? { chatKey, worldbookName };
       return this.queue.enqueue({ key, label, priority, run }).then(result => {
         if (this.lastFailedTask?.key === key && this.lastFailedTask.chatKey === chatKey && this.lastFailedTask.worldbookName === worldbookName) {
           this.lastFailedTask = null;
         }
         return result;
       }).catch(async error => {
+        if (isCommittedFailure(error)) { await this.trackCommittedFailure(error, error.origin ?? origin, key); throw error; }
         if (!sameTaskContext(this.host, chatKey, worldbookName) || isLifecycleAbort(error)) throw error;
         if (error?.code !== 'TASK_DUPLICATE') {
           if (retry && !['POST_WRITE_STATE', 'COMMIT_UNCERTAIN'].includes(error?.code)) this.lastFailedTask = { key, chatKey, worldbookName, action: retry };
@@ -1742,14 +2308,8 @@ const __ma_module_8 = (() => {
         throw error;
       });
     }
-    assertTaskContext(snapshot) {
-      snapshot.token.assertActive();
-      this.host.assertSnapshot(snapshot);
-    }
-    rethrowLifecycleAbort(error, snapshot) {
-      this.assertTaskContext(snapshot);
-      if (isLifecycleAbort(error)) throw error;
-    }
+    assertTaskContext(snapshot) { snapshot.token.assertActive(); this.host.assertSnapshot(snapshot); }
+    rethrowLifecycleAbort(error, snapshot) { if (isLifecycleAbort(error) || isCommittedFailure(error)) throw error; this.assertTaskContext(snapshot); }
     setStatus(phase, detail, messageIndex = -1) {
       const status = { phase, detail, messageIndex, updated: Date.now() };
       const saved = this.operational.setStatus(status).catch(error => console.error('[Mirror Abyss]', describeError(error), error));
@@ -1759,94 +2319,32 @@ const __ma_module_8 = (() => {
   }
   
   function emptyWrite() { return { changed: false, factCount: 0, touchedUids: [], createdUids: [], updatedUids: [], currentScene: '', receipt: null }; }
-  function writeStatus(result) {
-    const created = (result.createdUids || []).length;
-    const updated = (result.updatedUids || []).length;
-    return created || updated ? `已写入世界书：新增${created}条，更新${updated}条` : '处理完成：世界书无需更新';
-  }
+  function writeStatus(result) { const created = result.createdUids?.length ?? 0; const updated = result.updatedUids?.length ?? 0; return created || updated ? `已写入世界书：新增${created}条，更新${updated}条` : '处理完成：世界书无需更新'; }
   
-  function postWriteStateError(error) {
-    return fault('host', 'POST_WRITE_STATE', '世界书已经写入，但运行状态保存失败；请刷新确认，不要重复执行同一事实任务', error);
-  }
-  
-  function summaryFailureStatus(label, error, persistenceError) {
-    const suffix = persistenceError ? `；失败记录保存异常：${describeError(persistenceError)}` : '';
-    return `事实更新成功；${label}总结失败：${describeError(error)}${suffix}`;
-  }
-  
+  function postWriteStateError(error, result, origin) { const wrapped = fault('host', 'POST_WRITE_STATE', '世界书已经写入，但运行状态保存失败；请刷新确认，不要重复执行同一事实任务', error); if (result?.receipt) Object.assign(wrapped, { committed: true, receipt: result.receipt, origin: origin && { chatKey: origin.chatKey, worldbookName: origin.worldbookName }, retryable: false }); return wrapped; }
   function pruneFailureKeys(keys, validUids) { for (const key of keys) { const uids = key.split(':').slice(1).join(':').split(',').filter(Boolean); if (!uids.length || uids.some(uid => !validUids.has(uid))) keys.delete(key); } }
   function firstDifference(previous, current) { const length = Math.min(previous.length, current.length); for (let index = 0; index < length; index += 1) if (previous[index] !== current[index]) return index; return length; }
-  function sameTaskContext(host, chatKey, worldbookName) {
-    return host.chatKey() === chatKey && (!worldbookName || host.worldbookName() === worldbookName);
-  }
-  function isLifecycleAbort(error) {
-    return ['CANCELLED', 'CHAT_CHANGED', 'BOOK_CHANGED', 'MESSAGE_CHANGED', 'MESSAGE_MISSING', 'METADATA_CHAT_CHANGED'].includes(error?.code);
-  }
+  function sameTaskContext(host, chatKey, worldbookName) { return host.chatKey() === chatKey && (!worldbookName || host.worldbookName() === worldbookName); }
+  function receiptAffectsMessage(receipt, boundary) { return Number(receipt.messageIndex) >= boundary || unique(receipt.manualSourceMessageIndexes).some(index => Number(index) >= boundary); }
+  function isLifecycleAbort(error) { return ['CANCELLED', 'CHAT_CHANGED', 'BOOK_CHANGED', 'MESSAGE_CHANGED', 'MESSAGE_MISSING', 'METADATA_CHAT_CHANGED'].includes(error?.code); }
+  function isCommittedUncertain(error) { return error?.code === 'COMMIT_UNCERTAIN' && error?.committed === true && Boolean(error?.receipt); }
+  function isCommittedFailure(error) { return error?.committed === true && Boolean(error?.receipt); }
+  function tagAutomaticSummaryOutcome(value, key) { if (value?.receipt) value.receipt = { ...value.receipt, automaticSummaryKey: key }; return value; }
   return Object.freeze({ MirrorAbyssController });
-})();
-
-const __ma_module_9 = (() => {
-  const { applyNativeEntryFields, serializeSections } = __ma_module_3;
-  const { describeError } = __ma_module_0;
-  class DiagnosticsService {
-    constructor(host, worldbook, model) {
-      this.host = host;
-      this.worldbook = worldbook;
-      this.model = model;
-      this.lastReport = null;
-    }
-  
-    report() { return this.lastReport; }
-    clear() { this.lastReport = null; }
-  
-    async run(settings, { rounds = 3, includeModel = true } = {}, token) {
-      const report = { generatedAt: new Date().toISOString(), rounds: [], environment: {} };
-      report.environment = {
-        chat: this.host.chatKey(),
-        worldbook: this.host.worldbookName(),
-        modelRoute: settings.modelProfileId ? 'connection-profile' : 'generateRaw',
-      };
-      for (let round = 1; round <= rounds; round += 1) {
-        token.assertActive();
-        report.rounds.push(await this.runRound(settings, round, includeModel, token));
-      }
-      report.passed = report.rounds.every(item => item.checks.every(check => check.passed));
-      this.lastReport = report;
-      return report;
-    }
-  
-    async runRound(settings, round, includeModel, token) {
-      const checks = [];
-      const add = (name, passed, detail) => checks.push({ name, passed, detail });
-      add('当前聊天', Boolean(this.host.chatKey()), this.host.chatKey() || '未打开聊天');
-      add('模型路由', settings.modelProfileId ? this.host.connectionProfilesAvailable() : typeof this.host.context().generateRaw === 'function', settings.modelProfileId ? '连接配置' : '宿主默认连接');
-      try {
-        const opened = await this.worldbook.read(settings);
-        add('权威回读', true, `${opened.name} · ${opened.managed.length}管理条目 · ${opened.external.length}外部条目`);
-        const transaction = await this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ createEntry }) => {
-          const raw = createEntry();
-          applyNativeEntryFields(raw, '基础设定', `镜渊验收-${Date.now()}-${round}`, serializeSections('基础设定', new Map([['世界常识', ['临时验收项，写入后立即回滚。']]])));
-        });
-        if (transaction.receipt) await this.worldbook.rollback(settings, transaction.receipt);
-        add('事务写入与回滚', true, '保存、权威回读和回滚均通过');
-      } catch (error) { add('世界书事务', false, describeError(error)); }
-      if (includeModel) {
-        try {
-          token.assertActive();
-          await this.model.probe(settings, token);
-          add('模型实测', true, '返回并通过固定协议');
-        } catch (error) { add('模型实测', false, describeError(error)); }
-      }
-      return { round, checks };
-    }
-  }
-  return Object.freeze({ DiagnosticsService });
 })();
 
 const __ma_module_10 = (() => {
   const { EXTRACTION_TYPES, FACT_PROTOCOL, SUMMARY_PROTOCOL, WORLD_TYPES, hasSection, hasType, sectionNames } = __ma_module_2;
+  const { normalizeRelations, parseRelationTarget } = __ma_module_3;
   const { fault, normalizeIdentity, unique } = __ma_module_0;
-  const FACT_LINE = /^事实｜([^｜]+)｜([^｜]+)｜([^｜]+)｜(建立|变化|结束)｜([^｜]*)｜(.+)$/u;
+  const TYPE_PATTERN = WORLD_TYPES.join('|');
+  const FULL_RELATION_PATTERN = `【?(?:${TYPE_PATTERN})｜[^｜、]+】?`;
+  const PLAIN_RELATION_PATTERN = '[^｜、]*';
+  const RELATION_PATTERN = `(?:${FULL_RELATION_PATTERN}|${PLAIN_RELATION_PATTERN})(?:、(?:${FULL_RELATION_PATTERN}|${PLAIN_RELATION_PATTERN}))*`;
+  // The protocol delimiter is also part of an optional exact managed identity in
+  // the relation field. Recognize that one closed form explicitly while leaving
+  // later delimiters in the fact body untouched.
+  const FACT_LINE = new RegExp(`^事实｜([^｜]+)｜([^｜]+)｜([^｜]+)｜(建立|变化|结束)｜(${RELATION_PATTERN})｜(.+)$`, 'u');
   const SUMMARY_LINE = /^整理｜([^｜]+)｜([^｜]+)｜([^｜]+)｜([^｜]+)｜(.+)$/u;
   
   function cleanOutput(raw) {
@@ -1857,7 +2355,6 @@ const __ma_module_10 = (() => {
     const text = cleanOutput(raw);
     if (!text) throw fault('protocol', 'EMPTY_OUTPUT', '模型没有返回最终协议');
     if (text === '无') return [];
-    // JSON is a transport adapter into the same line protocol, not a second write path.
     const compatible = jsonAdapter?.(text);
     return (compatible ?? text.split(/\r?\n/u)).map(line => line.trim()).filter(Boolean);
   }
@@ -1934,13 +2431,70 @@ const __ma_module_10 = (() => {
       if (!fact) throw fault('protocol', 'FACT', `第${index + 1}行缺少完整事实`);
       const key = normalizeIdentity(`${type}｜${name}`);
       const group = groups.get(key) ?? { type, name, title: `${type}｜${name}`, rows: [] };
-      group.rows.push({ section, change, relations: unique(relationText.split('、')), fact });
+      group.rows.push({ section, change, relations: normalizeRelations(relationText), fact });
       groups.set(key, group);
     }
     const result = [...groups.values()];
     const limit = Number(options.maxIdentities ?? 32);
     if (result.length > limit) throw fault('protocol', 'LIMIT', `本次候选对象超过${limit}个上限`);
     return result;
+  }
+  
+  /**
+   * Validates model relation tokens against the authoritative managed identities.
+   * This is deliberately separate from parsing so the structured retry boundary
+   * can supply the current worldbook without creating another recall path.
+   */
+  function validateFactRelationTokens(groups, existingEntries = []) {
+    const sources = Array.isArray(groups) ? groups : [];
+    const identitiesByTitle = new Map();
+    for (const entry of [...(existingEntries ?? []), ...sources]) {
+      const identity = relationIdentity(entry);
+      if (!identity) continue;
+      const titleKey = normalizeIdentity(identity.title);
+      if (!identitiesByTitle.has(titleKey)) identitiesByTitle.set(titleKey, identity);
+    }
+    const identitiesByName = new Map();
+    for (const identity of identitiesByTitle.values()) {
+      const nameKey = normalizeIdentity(identity.name);
+      const matches = identitiesByName.get(nameKey) ?? [];
+      matches.push(identity);
+      identitiesByName.set(nameKey, matches);
+    }
+  
+    for (const source of sources) {
+      const sourceIdentity = relationIdentity(source);
+      if (!sourceIdentity) continue;
+      const sourceName = normalizeIdentity(sourceIdentity.name);
+      const sourceTitle = normalizeIdentity(sourceIdentity.title);
+      for (const row of source.rows ?? []) {
+        for (const token of normalizeRelations(row.relations)) {
+          const normalized = normalizeIdentity(token);
+          if (normalized === sourceName || normalized === sourceTitle) {
+            throw relationFault('RELATION_SELF', sourceIdentity, token, '不能引用条目自身');
+          }
+          if (identitiesByTitle.has(normalized)) continue;
+          const named = identitiesByName.get(normalized) ?? [];
+          if (named.length === 1) continue;
+          if (named.length > 1) {
+            throw relationFault(
+              'RELATION_AMBIGUOUS', sourceIdentity, token,
+              `稳定名称不唯一；请改用：${named.map(entry => entry.title).join('、')}`,
+            );
+          }
+          // An unresolved future identity is valid only in the closed typed form.
+          if (parseRelationTarget(token)) continue;
+          if (/[,，]/u.test(token)) {
+            throw relationFault('RELATION_DELIMITER', sourceIdentity, token, '多个目标只能使用“、”分隔；逗号不会被猜测拆分');
+          }
+          throw relationFault(
+            'RELATION_UNRESOLVED', sourceIdentity, token,
+            '目标必须是现有或同批条目的精确完整标题/唯一稳定名称；未来目标必须写成“类型｜稳定名称”',
+          );
+        }
+      }
+    }
+    return groups;
   }
   
   function parseSummaryProtocol(raw, sources, options = {}) {
@@ -2006,10 +2560,86 @@ const __ma_module_10 = (() => {
     if (!issues.length) throw fault('protocol', 'AUDIT_ISSUES', '审核结论要求修正，但没有给出明确问题');
     return { passed: false, issues };
   }
-  return Object.freeze({ parseFactProtocol, parseSummaryProtocol, parseAuditProtocol });
+  
+  function relationIdentity(entry) {
+    const type = String(entry?.type ?? '').trim();
+    const name = String(entry?.name ?? '').trim();
+    if (!type || !name) return null;
+    return { type, name, title: String(entry?.title ?? `${type}｜${name}`).trim() };
+  }
+  
+  function relationFault(code, source, token, detail) {
+    return fault('protocol', code, `“${source.title}”的关联对象“${token}”无效：${detail}`);
+  }
+  return Object.freeze({ parseFactProtocol, validateFactRelationTokens, parseSummaryProtocol, parseAuditProtocol });
 })();
 
 const __ma_module_11 = (() => {
+  const { applyNativeEntryFields, serializeSections } = __ma_module_4;
+  const { parseAuditProtocol } = __ma_module_10;
+  const { describeError } = __ma_module_0;
+  class DiagnosticsService {
+    constructor(host, worldbook, model) {
+      this.host = host;
+      this.worldbook = worldbook;
+      this.model = model;
+      this.lastReport = null;
+    }
+  
+    report() { return this.lastReport; }
+    clear() { this.lastReport = null; }
+  
+    async run(settings, snapshot, { rounds = 3, includeModel = true } = {}) {
+      const validate = () => this.host.assertSnapshot(snapshot);
+      validate();
+      const report = { generatedAt: new Date().toISOString(), rounds: [], environment: {} };
+      report.environment = {
+        chat: this.host.chatKey(),
+        worldbook: this.host.worldbookName(),
+        modelRoute: settings.modelProfileId ? 'connection-profile' : 'generateRaw',
+      };
+      for (let round = 1; round <= rounds; round += 1) {
+        report.rounds.push(await this.runRound(settings, round, includeModel, snapshot, validate));
+        validate();
+      }
+      report.passed = report.rounds.every(item => item.checks.every(check => check.passed));
+      this.lastReport = report;
+      return report;
+    }
+  
+    async runRound(settings, round, includeModel, snapshot, validate) {
+      const checks = [];
+      const add = (name, passed, detail) => checks.push({ name, passed, detail });
+      add('当前聊天', Boolean(this.host.chatKey()), this.host.chatKey() || '未打开聊天');
+      add('模型路由', settings.modelProfileId ? this.host.connectionProfilesAvailable() : typeof this.host.context().generateRaw === 'function', settings.modelProfileId ? '连接配置' : '宿主默认连接');
+      try {
+        const opened = await this.worldbook.read(settings);
+        add('权威回读', true, `${opened.name} · ${opened.managed.length}管理条目 · ${opened.external.length}外部条目`);
+        const transaction = await this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest, validate }, ({ createEntry }) => {
+          const raw = createEntry();
+          applyNativeEntryFields(raw, '基础设定', `镜渊验收-${Date.now()}-${round}`, serializeSections('基础设定', new Map([['世界常识', ['临时验收项，写入后立即回滚。']]])));
+        });
+        if (transaction.receipt) await this.worldbook.rollback(settings, transaction.receipt, { validate });
+        add('事务写入与回滚', true, '保存、权威回读和回滚均通过');
+      } catch (error) {
+        if (error?.code === 'COMMIT_UNCERTAIN') throw error;
+        validate(); add('世界书事务', false, describeError(error));
+      }
+      if (includeModel) {
+        try {
+          validate();
+          const raw = await this.model.text({ system: '只输出：审核结论：通过', user: '连接测试' }, settings, snapshot.token);
+          parseAuditProtocol(raw);
+          add('模型实测', true, '返回并通过固定协议');
+        } catch (error) { validate(); add('模型实测', false, describeError(error)); }
+      }
+      return { round, checks };
+    }
+  }
+  return Object.freeze({ DiagnosticsService });
+})();
+
+const __ma_module_12 = (() => {
   const REPLACEMENTS = Object.freeze([
     ['阴茎', '男性生殖器'], ['鸡巴', '男性生殖器'], ['肉棒', '男性生殖器'], ['龟头', '男性生殖器末端'],
     ['阴道', '女性生殖道'], ['小穴', '女性生殖道'], ['骚穴', '女性生殖道'], ['肉穴', '女性生殖道'],
@@ -2032,9 +2662,9 @@ const __ma_module_11 = (() => {
   return Object.freeze({ sanitizeExtractionCopy });
 })();
 
-const __ma_module_12 = (() => {
+const __ma_module_13 = (() => {
   const { EXTRACTION_TYPES, FACT_PROTOCOL, SUMMARY_PROTOCOL, WORLD_TYPES, renderSchema } = __ma_module_2;
-  const { sanitizeExtractionCopy } = __ma_module_11;
+  const { sanitizeExtractionCopy } = __ma_module_12;
   const outputDiscipline = `只输出规定的最终协议。不要输出分析、推理过程、解释、前言、后记、代码块或JSON。`;
   const schemaFieldDiscipline = `读取“允许类型与栏目”时，每行冒号左侧只是类型，右侧是该类型栏目名的封闭枚举；冒号仅用于说明，不属于任何字段。类型必须逐字复制冒号左侧的名称，栏目必须逐字复制同一行右侧列出的一个名称。任何未在该类型右侧逐字列出的栏目，即使语义相近也非法；严禁自造、概括、缩写或同义改写栏目名，也严禁把“类型：栏目”写进类型字段。`;
   
@@ -2057,7 +2687,7 @@ const __ma_module_12 = (() => {
   function extractionPrompt(playerText, assistantText, relevantEntries) {
     const index = sanitizeExtractionCopy(relevantEntries.map(entry => `${entry.title}\n${entry.content}`).join('\n\n'));
     return {
-      system: `你是世界事实整理员。只记录当前AI正文叙事层中本轮新发生、已经明确成立且会影响后续连续性的增量事实；不补全、不预测、不写玩家愿望。相关世界书条目只用于逐字复用已有对象的“类型｜稳定名称”、识别本轮涉及对象和核对旧事实；玩家输入只提供意图与上下文，二者都不能单独成为本轮新事实。正文对旧事实的核对、复述或引用，关于世界书本身的诊断或冲突说明，分析、假设、条件、可能性、建议、修正方案、待选定义，以及请求玩家确认的内容，一律不是已经成立的叙事事实，不得输出；如果正文只有这些内容，必须只输出“无”。只有正文确实描写不同实体各自发生了新变化时才分别覆盖对应类型；已有相关条目涉及同一对象时必须逐字复用其类型与稳定名称，不得为了覆盖更多类型而换类型新建同一对象。一次性行动、承诺或发现只有在正文明确写成已经发生并产生确定结果或后续影响时，才同时形成事件事实。\n\n允许类型与栏目：\n${renderSchema(EXTRACTION_TYPES)}\n${schemaFieldDiscipline}\n\n每条事实严格使用：\n${FACT_PROTOCOL}\n没有可记录事实时只输出“无”。\n${outputDiscipline}`,
+      system: `你是世界事实整理员。只记录当前AI正文叙事层中本轮新发生、已经明确成立且会影响后续连续性的增量事实；不补全、不预测、不写玩家愿望。相关世界书条目只用于逐字复用已有对象的“类型｜稳定名称”、识别本轮涉及对象和核对旧事实；玩家输入只提供意图与上下文，二者都不能单独成为本轮新事实。正文对旧事实的核对、复述或引用，关于世界书本身的诊断或冲突说明，分析、假设、条件、可能性、建议、修正方案、待选定义，以及请求玩家确认的内容，一律不是已经成立的叙事事实，不得输出；如果正文只有这些内容，必须只输出“无”。只有正文确实描写不同实体各自发生了新变化时才分别覆盖对应类型；已有相关条目涉及同一对象时必须逐字复用其类型与稳定名称，不得为了覆盖更多类型而换类型新建同一对象。一次性行动、承诺或发现只有在正文明确写成已经发生并产生确定结果或后续影响时，才同时形成事件事实。\n\n允许类型与栏目：\n${renderSchema(EXTRACTION_TYPES)}\n${schemaFieldDiscipline}\n\n每条事实严格使用：\n${FACT_PROTOCOL}\n关联对象有多个时只用“、”分隔。已有条目或本批对象必须填写精确完整标题，或在名称唯一时填写逐字一致的稳定名称；禁止关联当前事实自身。只有尚未出现的未来对象可使用明确的“类型｜稳定名称”暂存，不能填写逗号或自由组合描述。\n没有可记录事实时只输出“无”。\n${outputDiscipline}`,
       user: `相关世界书条目：\n${index || '（无）'}\n\n玩家本轮输入：\n${sanitizeExtractionCopy(playerText) || '（无）'}\n\n当前AI正文：\n${sanitizeExtractionCopy(assistantText)}`,
     };
   }
@@ -2085,12 +2715,12 @@ const __ma_module_12 = (() => {
   return Object.freeze({ auditPrompt, revisionPrompt, extractionPrompt, importPrompt, summaryPrompt });
 })();
 
-const __ma_module_13 = (() => {
+const __ma_module_14 = (() => {
   const { parseFactProtocol } = __ma_module_10;
   const { WORLD_TYPES } = __ma_module_2;
-  const { identityKey } = __ma_module_3;
+  const { identityKey } = __ma_module_4;
   const { digest, invariant } = __ma_module_0;
-  const { importPrompt } = __ma_module_12;
+  const { importPrompt } = __ma_module_13;
   const ensureImport = (condition, message, code = 'IMPORT') => invariant(condition, message, 'workflow', code);
   const SOURCE_LIMIT = 120000;
   const CHUNK_SIZE = 12000;
@@ -2204,52 +2834,13 @@ const __ma_module_13 = (() => {
   return Object.freeze({ WorldSettingImportService });
 })();
 
-const __ma_module_14 = (() => {
-  const { sectionNames } = __ma_module_2;
-  const { normalizeIdentity, unique } = __ma_module_0;
-  function explicitReferences(content, type) {
-    const headings = new Set(sectionNames(type));
-    return unique([...String(content ?? '').matchAll(/【([^】]+)】/gu)]
-      .map(match => match[1].trim())
-      .filter(value => value && !headings.has(value)));
-  }
-  
-  function projectRelations(entries) {
-    const byTitle = new Map();
-    const byName = new Map();
-    for (const entry of entries) {
-      byTitle.set(normalizeIdentity(entry.title), entry);
-      const key = normalizeIdentity(entry.name);
-      if (!byName.has(key)) byName.set(key, []);
-      byName.get(key).push(entry);
-    }
-    return entries.map(entry => {
-      const references = unique([...entry.relations, ...explicitReferences(entry.content, entry.type)]);
-      const related = [];
-      for (const reference of references) {
-        const exact = byTitle.get(normalizeIdentity(reference));
-        const named = byName.get(normalizeIdentity(reference)) ?? [];
-        const target = exact ?? (named.length === 1 ? named[0] : null);
-        if (target && target.uid !== entry.uid) related.push({ uid: target.uid, title: target.title });
-      }
-      return { ...entry, references, related: uniqueByUid(related) };
-    });
-  }
-  
-  function uniqueByUid(values) {
-    const seen = new Set();
-    return values.filter(value => !seen.has(value.uid) && seen.add(value.uid));
-  }
-  return Object.freeze({ explicitReferences, projectRelations });
-})();
-
 const __ma_module_15 = (() => {
-  const { applyNativeEntryFields, identityKey, managedEntries, markNativeActivity, mergeRows, parseManagedEntry, parseSections, replanNativeInsertion, serializeSections, setNativeCornerstone, setNativeFocus, updateNativeRecall } = __ma_module_3;
-  const { explicitReferences, projectRelations } = __ma_module_14;
+  const { applyNativeEntryFields, identityKey, managedEntries, markNativeActivity, mergeRows, parseManagedEntry, parseSections, replanNativeInsertion, serializeSections, setNativeCornerstone, setNativeFocus, updateNativeRecall } = __ma_module_4;
+  const { explicitReferences, projectRelations } = __ma_module_3;
   const { EXTRACTION_TYPES } = __ma_module_2;
-  const { parseAuditProtocol, parseFactProtocol, parseSummaryProtocol } = __ma_module_10;
+  const { parseAuditProtocol, parseFactProtocol, parseSummaryProtocol, validateFactRelationTokens } = __ma_module_10;
   const { invariant, normalizeIdentity, unique } = __ma_module_0;
-  const { auditPrompt, extractionPrompt, revisionPrompt, summaryPrompt } = __ma_module_12;
+  const { auditPrompt, extractionPrompt, revisionPrompt, summaryPrompt } = __ma_module_13;
   const ensureWorkflow = (condition, message, code = 'MEMORY') => invariant(condition, message, 'workflow', code);
   
   class MemoryService {
@@ -2281,7 +2872,10 @@ const __ma_module_15 = (() => {
         extractionPrompt(snapshot.playerText, snapshot.assistantText, relevant),
         settings,
         snapshot.token,
-        raw => parseFactProtocol(raw, { allowedTypes: EXTRACTION_TYPES, maxIdentities: 32 }),
+        raw => validateFactRelationTokens(
+          parseFactProtocol(raw, { allowedTypes: EXTRACTION_TYPES, maxIdentities: 32 }),
+          opened.managed,
+        ),
       );
       this.host.assertSnapshot(snapshot);
       progress('extract', 'success', response.value.length ? `提取${response.value.length}个对象` : '无需写入');
@@ -2355,12 +2949,26 @@ const __ma_module_15 = (() => {
       ensureWorkflow(sources.length === wanted.length && sources.length > 0, '总结来源已经变化，请刷新后重试', 'SUMMARY_SOURCE');
       ensureWorkflow(sources.every(entry => !entry.cornerstone), '基石条目为只读，请先解除基石锁', 'CORNERSTONE_READONLY');
       if (kind === 'merge') ensureWorkflow(sources.length >= 2, '人工合并至少选择两个条目', 'MERGE_COUNT');
+      // Long-term consolidation must be reproducible and chronological even if
+      // the operational group or player selection supplies UIDs in another
+      // order. UID is the deterministic tie-breaker for equal timestamps.
+      if (kind === 'large') sources.sort((left, right) => (
+        left.updatedAt - right.updatedAt
+        || String(left.uid).localeCompare(String(right.uid), undefined, { numeric: true })
+      ));
       const response = await this.model.structured(
         summaryPrompt(kind, sources, requirement), settings, snapshot.token,
         raw => parseSummaryProtocol(raw, sources, { allowNone: kind === 'small', requireReduction: kind === 'merge' }),
       );
       this.host.assertSnapshot(snapshot);
-      if (!response.value.length) return { changed: false, outputUids: sources.map(entry => entry.uid), receipt: null, raw: response.raw };
+      if (!response.value.length) return {
+        changed: false,
+        outputUids: sources.map(entry => entry.uid),
+        uidMappings: sources.map(entry => ({ sourceUids: [entry.uid], outputUids: [entry.uid] })),
+        sourceMessageIndexes: sourceMessageIndexes(sources),
+        receipt: null,
+        raw: response.raw,
+      };
       const transaction = await this.worldbook.transact(settings, {
         expectedName: opened.name,
         expectedDigest: opened.digest,
@@ -2372,6 +2980,10 @@ const __ma_module_15 = (() => {
         const activeByIdentity = new Map(current.map(entry => [identityKey(entry.type, entry.name), entry]));
         const outputUids = [];
         const absorbedUids = new Set();
+        const uidMappings = [];
+        const operationalState = this.host.state();
+        const currentScene = String(operationalState.currentScene ?? '').trim();
+        const remoteHistoricalUids = farHistoricalSceneUids(operationalState);
         for (const group of response.value) {
           const sourceEntries = group.refs.map(ref => sources[Number(ref.replace('条目', '')) - 1]);
           ensureWorkflow(sourceEntries.every(Boolean), '总结来源编号已经失效', 'SUMMARY_REF');
@@ -2384,16 +2996,39 @@ const __ma_module_15 = (() => {
           const targetRaw = targetSource ? data.entries[targetSource.uid] : createEntry();
           const sections = new Map(group.sections);
           applyNativeEntryFields(targetRaw, group.type, group.name, serializeSections(group.type, sections), targetRaw.key);
-          // Vector recall is reserved for distant scene history. Other result
-          // types remain on deterministic keyword/constant recall.
-          targetRaw.vectorized = kind === 'large' && group.type === '场景';
+          // Vector recall is reserved for distant, non-constant scene history.
+          // A manual selection can include the live scene, so both the target
+          // identity and its source identities must stay on deterministic recall.
+          const containsCurrentScene = group.type === '场景' && Boolean(currentScene) && (
+            group.name === currentScene
+            || sourceEntries.some(source => source.type === '场景' && source.name === currentScene)
+          );
+          const sourceSceneUids = sourceEntries.filter(source => source.type === '场景').map(source => source.uid);
+          const isFarHistoricalScene = sourceSceneUids.length > 0
+            && sourceSceneUids.every(uid => remoteHistoricalUids.has(String(uid)));
+          targetRaw.vectorized = kind === 'large'
+            && group.type === '场景'
+            && targetRaw.constant !== true
+            && !containsCurrentScene
+            && isFarHistoricalScene;
           const sourceScene = sourceEntries.map(source => source.scene).filter(Boolean).at(-1) ?? this.host.state().currentScene ?? '';
+          const sourceMessageIndex = Math.max(-1, ...sourceEntries
+            .map(source => Number(source.messageIndex))
+            .filter(Number.isInteger));
           markNativeActivity(targetRaw, {
-            messageIndex: snapshot.messageIndex,
+            // A summary represents the source period, not the moment its button
+            // was clicked. Preserve the newest source anchor so type-local
+            // old-to-new ST order remains stable for manual and automatic runs.
+            messageIndex: sourceMessageIndex >= 0 ? sourceMessageIndex : snapshot.messageIndex,
             scene: sourceScene,
             relations: explicitReferences(targetRaw.content, group.type),
           });
-          outputUids.push(String(targetRaw.uid));
+          const outputUid = String(targetRaw.uid);
+          outputUids.push(outputUid);
+          uidMappings.push({
+            sourceUids: unique(sourceEntries.map(source => source.uid)),
+            outputUids: [outputUid],
+          });
           for (const source of sourceEntries) {
             if (String(source.uid) === String(targetRaw.uid)) continue;
             ensureWorkflow(data.entries[source.uid] && byUid.has(source.uid), `总结来源UID ${source.uid}已经不存在`, 'SUMMARY_UID');
@@ -2402,9 +3037,15 @@ const __ma_module_15 = (() => {
         }
         // 先创建/更新全部目标，再删除被吸收来源，避免事务内 UID 提前复用。
         for (const uid of absorbedUids) delete data.entries[uid];
-        return { outputUids: unique(outputUids), absorbedUids: [...absorbedUids] };
+        return { outputUids: unique(outputUids), absorbedUids: [...absorbedUids], uidMappings };
       });
-      return { changed: transaction.changed, receipt: transaction.receipt, ...transaction.result, raw: response.raw };
+      return {
+        changed: transaction.changed,
+        receipt: transaction.receipt,
+        sourceMessageIndexes: sourceMessageIndexes(sources),
+        ...transaction.result,
+        raw: response.raw,
+      };
     }
   
     async listEntries(settings) {
@@ -2427,16 +3068,9 @@ const __ma_module_15 = (() => {
       return { ...opened, managed };
     }
   
-    async gameTime(settings) {
-      const opened = await this.listEntries(settings);
-      const entry = opened.managed.find(item => item.type === '世界' && item.name === '游戏时间');
-      const fact = entry?.sections.get('环境状态')?.find(value => value.startsWith('当前游戏时间：')) ?? '';
-      return fact.slice('当前游戏时间：'.length);
-    }
-  
-    async updateEntry(settings, uid, content) {
+    async updateEntry(settings, uid, content, validate) {
       const opened = await this.worldbook.read(settings);
-      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest, validate }, ({ data }) => {
         const raw = data.entries?.[uid];
         ensureWorkflow(raw, `UID ${uid}不存在`, 'ITEM_MISSING');
         const managed = parseManagedEntry(raw);
@@ -2447,20 +3081,20 @@ const __ma_module_15 = (() => {
       });
     }
   
-    async updateRecall(settings, uid, recall) {
+    async updateRecall(settings, uid, recall, validate) {
       const opened = await this.worldbook.read(settings);
-      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest, validate }, ({ data }) => {
         const raw = data.entries?.[uid];
         ensureWorkflow(raw, `UID ${uid}不存在`, 'ITEM_MISSING');
         updateNativeRecall(raw, recall);
       });
     }
   
-    async setCornerstone(settings, uids, locked) {
+    async setCornerstone(settings, uids, locked, validate) {
       const selected = unique(uids);
       ensureWorkflow(selected.length, '没有选择可设置的条目', 'SELECTION_EMPTY');
       const opened = await this.worldbook.read(settings);
-      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest, validate }, ({ data }) => {
         for (const uid of selected) {
           const raw = data.entries?.[uid];
           const managed = parseManagedEntry(raw);
@@ -2473,9 +3107,9 @@ const __ma_module_15 = (() => {
       });
     }
   
-    async setFocus(settings, uid, focused) {
+    async setFocus(settings, uid, focused, validate) {
       const opened = await this.worldbook.read(settings);
-      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest, validate }, ({ data }) => {
         const target = parseManagedEntry(data.entries?.[uid]);
         ensureWorkflow(target, `UID ${uid}不存在`, 'ITEM_MISSING');
         ensureWorkflow(!target.cornerstone, '基石条目为只读，请先解除基石锁', 'CORNERSTONE_READONLY');
@@ -2488,9 +3122,9 @@ const __ma_module_15 = (() => {
       });
     }
   
-    async replanInsertion(settings) {
+    async replanInsertion(settings, validate) {
       const opened = await this.worldbook.read(settings);
-      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest, validate }, ({ data }) => {
         const plannedUids = [];
         const lockedUids = [];
         for (const entry of managedEntries(data).managed) {
@@ -2506,10 +3140,10 @@ const __ma_module_15 = (() => {
       });
     }
   
-    async setGameTime(settings, value) {
+    async setGameTime(settings, value, validate) {
       const time = String(value ?? '').trim();
       const opened = await this.worldbook.read(settings);
-      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data, createEntry }) => {
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest, validate }, ({ data, createEntry }) => {
         const current = managedEntries(data).managed.find(entry => entry.type === '世界' && entry.name === '游戏时间');
         if (!time) {
           if (current) {
@@ -2544,9 +3178,9 @@ const __ma_module_15 = (() => {
       };
     }
   
-    async clearManaged(settings) {
+    async clearManaged(settings, validate) {
       const opened = await this.worldbook.read(settings);
-      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest, validate }, ({ data }) => {
         const entries = managedEntries(data).managed;
         ensureWorkflow(entries.every(entry => !entry.cornerstone), '存在基石条目，请先解除基石锁', 'CORNERSTONE_READONLY');
         for (const entry of entries) delete data.entries[entry.uid];
@@ -2554,14 +3188,16 @@ const __ma_module_15 = (() => {
     }
   
     async testConnection(settings, token) {
-      return this.model.probe(settings, token);
+      const raw = await this.model.text({ system: '只输出：审核结论：通过', user: '连接测试' }, settings, token);
+      parseAuditProtocol(raw);
+      return '连接与固定协议均通过';
     }
   
-    async deleteEntries(settings, uids) {
+    async deleteEntries(settings, uids, validate) {
       const selected = unique(uids);
       ensureWorkflow(selected.length, '没有选择条目', 'SELECTION_EMPTY');
       const opened = await this.worldbook.read(settings);
-      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest }, ({ data }) => {
+      return this.worldbook.transact(settings, { expectedName: opened.name, expectedDigest: opened.digest, validate }, ({ data }) => {
         for (const uid of selected) {
           const managed = parseManagedEntry(data.entries?.[uid]);
           ensureWorkflow(managed, `UID ${uid}不存在`, 'ITEM_MISSING');
@@ -2572,9 +3208,21 @@ const __ma_module_15 = (() => {
       });
     }
   
-    rollback(settings, receipt) {
-      return this.worldbook.rollback(settings, receipt);
+    rollback(settings, receipt, validate) {
+      return this.worldbook.rollback(settings, receipt, validate ? { validate } : undefined);
     }
+  }
+  
+  function sourceMessageIndexes(sources) {
+    return unique(sources.map(entry => Number(entry.messageIndex)).filter(index => Number.isInteger(index) && index >= 0));
+  }
+  
+  function farHistoricalSceneUids(state) {
+    const groups = [
+      ...(Array.isArray(state?.closedGroups) ? state.closedGroups : []),
+      ...(Array.isArray(state?.summarizedGroups) ? state.summarizedGroups : []),
+    ];
+    return new Set(groups.slice(0, -1).flatMap(group => unique(group?.uids).map(String)));
   }
   
   function selectRelevant(entries, text, limit) {
@@ -2592,7 +3240,7 @@ const __ma_module_15 = (() => {
 })();
 
 const __ma_module_16 = (() => {
-  const { applyNativeEntryFields, parseManagedTitle, parseSections } = __ma_module_3;
+  const { applyNativeEntryFields, parseManagedTitle, parseSections } = __ma_module_4;
   const { describeError, invariant } = __ma_module_0;
   const ensureMigration = (condition, message, code = 'MIGRATION') => invariant(condition, message, 'workflow', code);
   
@@ -2627,7 +3275,7 @@ const __ma_module_16 = (() => {
       return this.previewState;
     }
   
-    async commit(settings) {
+    async commit(settings, validate) {
       const preview = this.previewState;
       ensureMigration(preview, '请先扫描可迁移条目', 'MIGRATION_PREVIEW');
       ensureMigration(preview.candidates.length, '没有可迁移条目', 'MIGRATION_EMPTY');
@@ -2635,6 +3283,7 @@ const __ma_module_16 = (() => {
       const transaction = await this.worldbook.transact(settings, {
         expectedName: preview.worldbookName,
         expectedDigest: preview.worldbookDigest,
+        ...(validate ? { validate } : {}),
       }, ({ data }) => {
         for (const uid of wanted) {
           const raw = data.entries?.[uid];
@@ -2651,10 +3300,10 @@ const __ma_module_16 = (() => {
       return transaction;
     }
   
-    async undo(settings) {
+    async undo(settings, validate) {
       ensureMigration(this.undoReceipt, '没有可撤销的迁移', 'MIGRATION_UNDO');
       const receipt = this.undoReceipt;
-      const result = await this.worldbook.rollback(settings, receipt);
+      const result = await this.worldbook.rollback(settings, receipt, validate ? { validate } : undefined);
       this.undoReceipt = null;
       return result;
     }
@@ -2663,7 +3312,6 @@ const __ma_module_16 = (() => {
 })();
 
 const __ma_module_17 = (() => {
-  const { parseAuditProtocol } = __ma_module_10;
   const { MirrorAbyssError, errorText, fault } = __ma_module_0;
   class ModelGateway {
     constructor(host) {
@@ -2671,7 +3319,6 @@ const __ma_module_17 = (() => {
     }
   
     async text(prompt, settings, token) {
-      let lastError;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           token.assertActive();
@@ -2681,10 +3328,10 @@ const __ma_module_17 = (() => {
         } catch (error) {
           if (token.cancelled) token.assertActive();
           if (error instanceof MirrorAbyssError && !isTransient(error)) throw error;
-          lastError = error;
+          if (attempt > 0) throw fault('model', 'REQUEST', errorText(error), error);
         }
       }
-      throw fault('model', 'REQUEST', errorText(lastError), lastError);
+      throw fault('model', 'REQUEST', '模型请求失败');
     }
   
     async structured(prompt, settings, token, parse) {
@@ -2702,15 +3349,10 @@ const __ma_module_17 = (() => {
         } catch (error) {
           if (token.cancelled) token.assertActive();
           failure = errorText(error);
+          if (attempt > 0) throw fault('model', 'PROTOCOL_RETRY', `模型连续两次未通过协议校验：${failure}`, error);
         }
       }
-      throw fault('model', 'PROTOCOL_RETRY', `模型连续两次未通过协议校验：${failure}`);
-    }
-  
-    async probe(settings, token) {
-      const raw = await this.text({ system: '只输出：审核结论：通过', user: '连接测试' }, settings, token);
-      parseAuditProtocol(raw);
-      return '连接与固定协议均通过';
+      throw fault('model', 'PROTOCOL', '模型协议校验失败');
     }
   }
   
@@ -2762,8 +3404,7 @@ const __ma_module_18 = (() => {
         const state = this.host.state();
         const messages = [...document.querySelectorAll('#chat .mes')].filter(node => node.getAttribute('is_user') !== 'true');
         messages.forEach((message, order) => {
-          const index = this.host.messageIndex(message.getAttribute('mesid'));
-          if (index < 0) return;
+          const index = messageIndex(message, order);
           const messageState = state.messageStates?.[index];
           const latest = order === messages.length - 1;
           if (!messageState && !latest) return;
@@ -2795,6 +3436,14 @@ const __ma_module_18 = (() => {
   function mutationIncludesChatContent(record) {
     const nodes = [...record.addedNodes, ...record.removedNodes];
     return nodes.some(node => node.nodeType === Node.TEXT_NODE || !node.classList?.contains(CLASS_NAME));
+  }
+  
+  function messageIndex(node, fallback) {
+    for (const name of ['mesid', 'message-id', 'data-message-id']) {
+      const value = Number(node.getAttribute(name));
+      if (Number.isInteger(value) && value >= 0) return value;
+    }
+    return fallback;
   }
   
   function latestText(state, messageState) {
@@ -2849,7 +3498,7 @@ const __ma_module_19 = (() => {
       control.disabled = true;
       control.setAttribute('aria-busy', 'true');
       control.setAttribute('aria-label', busyText);
-      control.classList.add('is-busy');
+      control.classList?.add('is-busy');
       try {
         await task();
       } catch (error) {
@@ -2858,7 +3507,7 @@ const __ma_module_19 = (() => {
         control.disabled = false;
         control.setAttribute('aria-busy', 'false');
         control.setAttribute('aria-label', text);
-        control.classList.remove('is-busy');
+        control.classList?.remove('is-busy');
       }
     }, className);
     return control;
@@ -2876,6 +3525,7 @@ const __ma_module_19 = (() => {
     confirmText = '确认',
     cancelText = '取消',
     danger = false,
+    className = '',
   }) {
     activeDialog?.cancel();
     return new Promise(resolve => {
@@ -2885,13 +3535,19 @@ const __ma_module_19 = (() => {
       let input = null;
       let fieldHost = null;
       if (field) {
-        input = element(field.multiline ? 'textarea' : 'input', {
+        const tag = field.options ? 'select' : field.multiline ? 'textarea' : 'input';
+        input = element(tag, {
           className: 'ma-dialog-input',
-          type: field.multiline ? undefined : 'text',
+          type: tag === 'input' ? 'text' : undefined,
           value: field.value ?? '',
           placeholder: field.placeholder ?? '',
           ariaLabel: field.label,
         });
+        for (const option of field.options ?? []) {
+          const control = element('option', { text: option.label, value: option.value });
+          control.selected = String(option.value) === String(field.value ?? '');
+          input.append(control);
+        }
         fieldHost = element('label', { className: 'ma-dialog-field' }, [
           element('strong', { text: field.label }),
           input,
@@ -2904,7 +3560,7 @@ const __ma_module_19 = (() => {
         text: confirmText,
         className: `ma-button ${danger ? 'ma-danger' : ''}`.trim(),
       });
-      const form = element('form', { className: 'ma-dialog' }, [
+      const form = element('form', { className: `ma-dialog ${className}`.trim() }, [
         element('h2', { text: title }),
         message ? element('p', { className: 'ma-dialog-message', text: message }) : null,
         fieldHost,
@@ -3370,11 +4026,38 @@ const __ma_module_21 = (() => {
 })();
 
 const __ma_module_22 = (() => {
+  const { assignEntryFolder } = __ma_module_6;
+  const { requestDialog } = __ma_module_19;
+  function requestNewFolderName() {
+    return requestDialog({
+      title: '新建文件夹', message: '同名文件夹已存在时将直接使用它。',
+      field: { label: '文件夹名称', required: true }, confirmText: '新建', className: 'ma-folder-dialog',
+    });
+  }
+  
+  function requestFolderMove(layout, selected) {
+    const folders = [{ id: 'default', name: '默认分类' }, ...layout.folders];
+    return requestDialog({
+      title: '移动到文件夹', message: `将已选${selected.length}个条目移动到指定文件夹。`,
+      field: { label: '目标文件夹', value: 'default', options: folders.map(folder => ({ label: folder.name, value: folder.id })) },
+      confirmText: '移动', className: 'ma-folder-dialog',
+    }).then(answer => {
+      if (!answer.confirmed) return null;
+      let next = layout;
+      for (const entry of selected) next = assignEntryFolder(next, entry.uid, answer.value);
+      return { layout: next, folderName: folders.find(folder => folder.id === answer.value)?.name ?? '默认分类' };
+    });
+  }
+  return Object.freeze({ requestNewFolderName, requestFolderMove });
+})();
+
+const __ma_module_23 = (() => {
   const { WORLD_SCHEMA, WORLD_TYPES } = __ma_module_2;
-  const { assignEntryFolder, createOrReuseFolder, deleteFolder, moveEntryWithinFolder, moveFolderBy, normalizeFolderLayout, pageFolderEntries, renameOrMergeFolder, setFolderCollapsed } = __ma_module_5;
+  const { assignEntryFolder, createOrReuseFolder, deleteFolder, moveEntryWithinFolder, moveFolderBy, normalizeFolderLayout, pageFolderEntries, renameOrMergeFolder, setFolderCollapsed } = __ma_module_6;
   const { fault } = __ma_module_0;
   const { button, element, inform, requestDialog, taskButton } = __ma_module_19;
   const { entrySettings } = __ma_module_21;
+  const { requestFolderMove, requestNewFolderName } = __ma_module_22;
   class NotesPage {
     constructor(panel) {
       this.panel = panel;
@@ -3385,7 +4068,7 @@ const __ma_module_22 = (() => {
       // selection and folders remain presentation state and never copy facts.
       const opened = await this.panel.controller.listEntries();
       this.panel.entryData = opened;
-      this.activatedUids = new Set(this.panel.controller.activatedUids().map(value => String(value)));
+      this.activatedUids = await this.actualActivatedUids();
       const managed = opened.managed;
       if (this.panel.expandedUid && !managed.some(entry => String(entry.uid) === this.panel.expandedUid)) this.panel.expandedUid = '';
       const top = element('section', { className: 'ma-notes-head' }, [
@@ -3456,12 +4139,15 @@ const __ma_module_22 = (() => {
     manageBar(opened) {
       const cornerstone = taskButton('设为基石', () => this.toggleSelectedCornerstone(), '', '处理中…');
       this.cornerstoneButton = cornerstone;
+      const moveToFolder = button('移动到文件夹', () => this.moveSelectedToFolder(opened.name));
+      this.moveFolderButton = moveToFolder;
       this.selectionStatus = element('span', { className: 'ma-selection-status', text: '已选 0 条' });
       return element('div', { className: `ma-manage-bar ${this.panel.editing ? '' : 'is-hidden'}` }, [
         this.selectionStatus,
         element('div', { className: 'ma-manage-actions' }, [
           cornerstone,
           button('＋ 文件夹', () => this.createFolder(opened.name)),
+          moveToFolder,
           taskButton('小总结', () => this.runSelectedSummary('small'), '', '总结中…'),
           taskButton('大总结', () => this.runSelectedSummary('large'), '', '总结中…'),
           taskButton('手动合并', () => this.runSelectedSummary('merge'), '', '合并中…'),
@@ -3639,6 +4325,12 @@ const __ma_module_22 = (() => {
       );
     }
   
+    async actualActivatedUids() {
+      if (typeof this.panel.controller.activatedUids !== 'function') return new Set();
+      const values = await this.panel.controller.activatedUids();
+      return new Set(values.map(value => String(value)));
+    }
+  
     layout(worldbookName) {
       const current = this.panel.controller.settings().foldersByWorldbook?.[worldbookName];
       return normalizeFolderLayout(current);
@@ -3653,12 +4345,7 @@ const __ma_module_22 = (() => {
     }
   
     async createFolder(name) {
-      const answer = await requestDialog({
-        title: '新建文件夹',
-        message: '同名文件夹已存在时将直接使用它。',
-        field: { label: '文件夹名称', required: true },
-        confirmText: '新建',
-      });
+      const answer = await requestNewFolderName();
       const value = answer.value.trim();
       if (!answer.confirmed || !value) return;
       const result = createOrReuseFolder(this.layout(name), value, `folder-${Date.now().toString(36)}`);
@@ -3696,6 +4383,14 @@ const __ma_module_22 = (() => {
       this.saveLayout(name, assignEntryFolder(this.layout(name), uid, id), '条目文件夹已更新');
     }
   
+    async moveSelectedToFolder(name) {
+      const selected = this.selectedEntries();
+      const moved = await requestFolderMove(this.layout(name), selected);
+      if (!moved) return;
+      this.panel.selected.clear();
+      this.saveLayout(name, moved.layout, `已将${selected.length}个条目移动到“${moved.folderName}”`);
+    }
+  
     toggleFolder(name, id) {
       const layout = this.layout(name);
       const expandedFolder = layout.assignments[this.panel.expandedUid] || 'default';
@@ -3720,6 +4415,7 @@ const __ma_module_22 = (() => {
       const unlock = selected.length > 0 && selected.every(entry => entry.cornerstone);
       this.cornerstoneButton.textContent = unlock ? '解除基石' : '设为基石';
       this.cornerstoneButton.disabled = selected.length === 0;
+      if (this.moveFolderButton) this.moveFolderButton.disabled = selected.length === 0;
       if (this.selectionStatus) this.selectionStatus.textContent = `已选 ${selected.length} 条`;
     }
   
@@ -3818,15 +4514,15 @@ const __ma_module_22 = (() => {
   return Object.freeze({ NotesPage });
 })();
 
-const __ma_module_23 = (() => {
+const __ma_module_24 = (() => {
   const { button, element, taskButton } = __ma_module_19;
   class RunPage {
     constructor(panel) { this.panel = panel; }
   
     async render(main) {
       const { controller, host } = this.panel;
-      const activatedUids = controller.activatedUids();
-      const failures = renderFailures(controller, host.state().summaryFailures);
+      const activatedUids = typeof controller.activatedUids === 'function' ? await controller.activatedUids() : [];
+      const failures = renderFailures(controller, host.state().summaryFailures ?? []);
       main.append(
         element('section', { className: 'ma-scene-strip' }, [
           element('span', { text: host.state().currentScene ? `当前场景 · ${host.state().currentScene}` : '当前场景 · 未识别' }),
@@ -3851,7 +4547,7 @@ const __ma_module_23 = (() => {
     refreshStatus(main) {
       const current = main?.querySelector?.('.ma-runtime-status');
       if (!current) return;
-      const activated = this.panel.controller.activatedUids();
+      const activated = typeof this.panel.controller.activatedUids === 'function' ? this.panel.controller.activatedUids() : [];
       current.replaceWith(this.statusSection(activated));
     }
   
@@ -3890,7 +4586,7 @@ const __ma_module_23 = (() => {
   
   function renderLastWrite(panel, lastWrite) {
     if (!lastWrite) return null;
-    const touchedUids = lastWrite.touchedUids;
+    const touchedUids = Array.isArray(lastWrite.touchedUids) ? lastWrite.touchedUids : [];
     return element('div', { className: 'ma-write-receipt ma-inline-actions' }, [
       element('span', { text: `已确认落盘 · ${lastWrite.created}新增 · ${lastWrite.updated}更新 · ${touchedUids.length}个UID` }),
       touchedUids.length ? button('定位本次更新', () => panel.showEntry(touchedUids[0]), 'ma-mini ma-quiet') : null,
@@ -3920,12 +4616,12 @@ const __ma_module_23 = (() => {
   return Object.freeze({ RunPage });
 })();
 
-const __ma_module_24 = (() => {
+const __ma_module_25 = (() => {
   const { describeError } = __ma_module_0;
   const { button, element } = __ma_module_19;
   const { MaintenancePage } = __ma_module_20;
-  const { NotesPage } = __ma_module_22;
-  const { RunPage } = __ma_module_23;
+  const { NotesPage } = __ma_module_23;
+  const { RunPage } = __ma_module_24;
   const ROOT_ID = 'mirror-abyss-clean-root';
   
   class MirrorAbyssPanel {
@@ -4103,7 +4799,7 @@ const __ma_module_24 = (() => {
       }
       if (page === 'notes' && this.focusExpandedUid) {
         const target = next.querySelector?.(`[data-entry-uid="${this.focusExpandedUid}"]`);
-        target?.scrollIntoView({ block: 'nearest' });
+        target?.scrollIntoView?.({ block: 'nearest' });
         this.focusExpandedUid = '';
       }
     }
@@ -4128,7 +4824,7 @@ const __ma_module_24 = (() => {
     }
   
     syncChatContext() {
-      const next = String(this.host.chatKey());
+      const next = String(this.host.chatKey?.() ?? '');
       if (this.chatKey === null) this.chatKey = next;
       else if (this.chatKey !== next) {
         this.resetTransientState();
@@ -4188,17 +4884,17 @@ const __ma_module_24 = (() => {
   return Object.freeze({ MirrorAbyssPanel });
 })();
 
-const __ma_module_25 = (() => {
+const __ma_module_26 = (() => {
   const { HostAdapter, SettingsStore } = __ma_module_1;
-  const { WorldbookRepository } = __ma_module_4;
-  const { MirrorAbyssController } = __ma_module_8;
-  const { DiagnosticsService } = __ma_module_9;
-  const { WorldSettingImportService } = __ma_module_13;
+  const { WorldbookRepository } = __ma_module_5;
+  const { MirrorAbyssController } = __ma_module_9;
+  const { DiagnosticsService } = __ma_module_11;
+  const { WorldSettingImportService } = __ma_module_14;
   const { MemoryService } = __ma_module_15;
   const { MigrationService } = __ma_module_16;
   const { ModelGateway } = __ma_module_17;
   const { ChatIndicator } = __ma_module_18;
-  const { MirrorAbyssPanel } = __ma_module_24;
+  const { MirrorAbyssPanel } = __ma_module_25;
   function createApplication() {
     const host = new HostAdapter();
     const settingsStore = new SettingsStore();
@@ -4228,7 +4924,7 @@ const __ma_module_25 = (() => {
   return Object.freeze({ createApplication });
 })();
 
-const { createApplication } = __ma_module_25;
+const { createApplication } = __ma_module_26;
 
 export { createApplication };
 

@@ -40,6 +40,11 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
 .ma-dialog-input[aria-invalid="true"] { border-color: var(--ma-danger); }
 .ma-dialog-error { min-height: 26px; color: var(--ma-danger); }
 .ma-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.ma-folder-dialog { width: min(540px, calc(100vw - 36px)); padding: 26px; }
+.ma-folder-dialog .ma-dialog-field { gap: 10px; margin-top: 20px; }
+.ma-folder-dialog .ma-dialog-input { min-height: 50px; padding: 12px 14px; }
+.ma-folder-dialog .ma-dialog-actions { gap: 14px; margin-top: 24px; }
+.ma-folder-dialog .ma-dialog-actions .ma-button { min-width: 96px; }
 .ma-launcher { position: fixed; right: max(12px, env(safe-area-inset-right)); top: 50dvh; z-index: 10050; width: 46px; min-width: 46px; height: 46px; padding: 0; border-radius: 50%; touch-action: none; user-select: none; border-color: #5e879d; background: radial-gradient(circle at 38% 30%, #315c72 0, #17384e 52%, #102b3b 100%); color: #fff; box-shadow: 0 0 0 1px rgba(105,191,209,.16), 0 5px 18px rgba(17, 40, 57, .3); }
 .ma-launcher::before { content: ''; position: absolute; inset: 3px; border: 1px solid rgba(213,235,241,.36); border-radius: inherit; box-shadow: inset 0 0 8px rgba(105,191,209,.22); pointer-events: none; }
 .ma-panel { position: fixed; isolation: isolate; z-index: 10051; right: max(12px, env(safe-area-inset-right)); top: 6dvh; width: min(720px, calc(100vw - 24px)); height: min(88dvh, 900px); display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--ma-frame); border-radius: 18px 14px 20px 12px; background: radial-gradient(ellipse at 7% 2%, rgba(105,191,209,.1), transparent 29%), radial-gradient(ellipse at 96% 91%, rgba(182,145,85,.09), transparent 34%), var(--ma-skin); -webkit-backdrop-filter: blur(12px) saturate(1.08); backdrop-filter: blur(12px) saturate(1.08); box-shadow: 0 0 0 1px rgba(105,191,209,.2), 0 0 0 4px rgba(19,49,67,.09), 0 20px 70px var(--ma-host-shadow), inset 0 0 24px rgba(35,111,155,.06); }
@@ -183,6 +188,9 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
   .ma-panel::before { inset: 3px; border-radius: 0; }
   .ma-dialog-backdrop { padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
   .ma-dialog { width: 100%; max-height: calc(100dvh - 24px); padding: 18px; }
+  .ma-folder-dialog { padding: 22px 18px; }
+  .ma-folder-dialog .ma-dialog-actions { gap: 12px; }
+  .ma-folder-dialog .ma-dialog-actions .ma-button { flex: 1 1 0; min-width: 0; }
   .ma-dialog, .ma-dialog button, .ma-dialog input, .ma-dialog textarea { font-size: 16px; }
   .ma-header { padding-top: max(10px, env(safe-area-inset-top)); }
   .ma-root, .ma-root button, .ma-root input, .ma-root textarea, .ma-root select { font-size: 16px; }

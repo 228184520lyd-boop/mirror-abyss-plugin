@@ -9,14 +9,18 @@ function start() {
     next.start();
     application = next;
   } catch (error) {
-    next.stop();
-    throw error;
+    next.stop?.();
+    const startupError = error instanceof Error
+      ? error
+      : new Error(`Mirror Abyss启动失败：${error?.message ?? error?.type ?? String(error)}`, { cause: error });
+    console.error('[Mirror Abyss] startup failed', startupError);
+    throw startupError;
   }
 }
 
-export function onActivate() { start(); }
+export function onActivate() { return start(); }
 
-export function onEnable() { start(); }
+export function onEnable() { return start(); }
 
 export function onDisable() {
   application?.stop();

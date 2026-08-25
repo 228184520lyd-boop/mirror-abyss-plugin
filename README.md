@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-版本：`4.0.18`
+版本：`4.0.19`
 
 Mirror Abyss 是 SillyTavern 的长期游玩记忆扩展。世界书是唯一长期事实源；模型负责语义整理，插件只负责固定协议、精确身份、UID、单一事务入口、任务编排和界面。
 
@@ -21,20 +21,16 @@ UI或宿主事件 → TaskQueue → Controller → Memory/Import/Migration → M
 
 ## 4.0.19 功能
 
-- 宿主 `messageIndex` 只认 ST 事件编号与 `{ messageId }`，去掉多余别名兼容。
-- 三轮验收与模型探测共用队列取消令牌，取消后不再另起独立探测。
-- 元数据保存用同一 `chatKey()` 边界，避免重复读宿主聊天 ID。
-- 保持 4.0.18 单一链路：Schema / 行协议 / WorldbookRepository / ModelGateway.probe。
+- 手记批量管理增加“移动到文件夹”，可将已选条目一次移入指定文件夹或默认分类；只更新 UID 文件夹布局，不改世界书事实。
+- 新建与移动文件夹弹框增加内边距、字段间距和按钮间距，手机端按钮平分可用宽度。
 
 ## 4.0.18 功能
 
-- 收口单一链路：游戏时间从世界书栏目读取，Controller 不再解析条目正文。
-- 模型连接探测收口到 `ModelGateway.probe`；维护页测试与三轮验收共用同一入口。
-- 自动小/大总结共用同一错误分类与阻断路径；不确定提交与落盘后状态失败仍不进入可重试失败。
-- 聊天指示器只用宿主 `mesid` → `HostAdapter.messageIndex`，不再用视觉顺序冒充消息编号。
-- 模型输出只接受 `generateRaw` 字符串与连接配置 `content`；宿主事件缺失时立即失败。
-- 界面不再探测 Controller 方法是否存在；激活 UID、聊天键与按钮忙碌状态走既有契约。
-- JSON 仍只作为行协议的传输适配，不另开写入链。
+- 关联对象写入同一原生世界书正文的规范“镜渊关系”块；SillyTavern 开启递归且条目原生递归开关允许时，由宿主自己的递归扫描继续命中关联条目，不增加第二提示词或第二召回链。`无`、`none`、`null` 等空关联在协议边界统一归一为空数组。
+- 大总结仅将非当前、非常驻的远端历史场景设为向量；把历史场景切换为原生常驻时同步关闭向量，禁止“常驻＋向量”。
+- 手动小总结、手动大总结和手动合并把输出 UID 原子映射回原场景组，使其继续参与后续大总结；消息回滚只清理实际事务涉及的 UID，保留未受影响旧组。
+- 大总结按条目更新时间和 UID 稳定排列来源；整理输出继承来源中最新的消息锚点，手动点击不会把远期条目误排成近期事实。
+- 部署 ZIP 内固定为唯一 `mirror-abyss/` 根目录；所有归档目录为 `0755`、普通文件为 `0644`，打包后会校验顶层结构和 Unix 权限元数据。
 
 ## 4.0.17 功能
 
@@ -104,7 +100,19 @@ UI或宿主事件 → TaskQueue → Controller → Memory/Import/Migration → M
 
 `index.js` 是静态生命周期入口，加载构建产物 `app.js`；`style.css` 由宿主按清单加载。运行时不会请求 `src/`。请使用当前 SillyTavern release；项目没有虚构未经实机验证的最低客户端版本。
 
-部署包只包含宿主运行所需文件，可解压到 SillyTavern 的第三方扩展目录；源码包用于 GitHub 发布和继续开发。
+## 本地部署包安装
+
+部署包只包含宿主运行所需文件，归档内固定为唯一顶层目录 `mirror-abyss/`。将部署包直接解压到 SillyTavern 的 `public/scripts/extensions/third-party/`，最终必须形成：
+
+```text
+public/scripts/extensions/third-party/mirror-abyss/manifest.json
+```
+
+升级时覆盖同一个 `mirror-abyss/` 目录。若曾解压过以版本号命名的目录（例如 `Mirror-Abyss-4.0.17/`），请在保留必要备份后移走旧目录，确认 `third-party/` 下只剩一个镜渊插件副本，再重启 SillyTavern 并强制刷新页面；否则宿主可能同时加载两份插件。不要把 ZIP 文件本身放入插件目录，也不要形成 `mirror-abyss/mirror-abyss/` 双层嵌套。
+
+SillyTavern 同一用户、同一聊天与同一世界书的验收和正常使用应保持单个 ST 页面；宿主的多个页面同时编辑同一世界书可能发生 last-write 覆盖，这属于宿主多窗口写入边界，不是 Mirror Abyss 的第二写入链或内部状态缺陷。
+
+部署归档中的目录权限统一为 `0755`、文件权限统一为 `0644`，可以由不同于打包者的普通系统用户读取。源码包仍使用带版本号的顶层目录，用于 GitHub 发布和继续开发。
 
 ## 验证
 
@@ -113,5 +121,13 @@ npm run build
 npm run verify
 npm run package
 ```
+
+打包器还会校验发布目录、两个 ZIP 文件和 `SHA256SUMS.txt` 本身分别为 `0755` 与 `0644`。若源码位于 exFAT、SMB `noowners` 等不能保存 POSIX 权限的卷，默认 `release/` 会明确失败，不能把合成的 `0700` 误报为已修复；请把候选输出到支持 POSIX 权限的目录，例如：
+
+```bash
+npm run package -- --output /path/on/posix-filesystem/mirror-abyss-release
+```
+
+最终交付 SHA-256 必须从完成实机验收后、源码冻结时的这一轮产物重算；候选打包哈希不能提前写进最终报告。
 
 不要直接编辑根目录 `app.js`；它由 `src/` 生成。架构边界和修改路由见 `ARCHITECTURE.md`，错误定性见 `ERROR-CATALOG.md`。维护页的“三轮完整验收”会调用当前模型路由并执行可回滚的临时世界书事务，因此会产生少量模型请求。
