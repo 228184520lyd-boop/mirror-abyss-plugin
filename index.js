@@ -1,4 +1,4 @@
-import { createApplication } from './app.js';
+import { createApplication } from './app.js?v=4.0.19';
 
 let application;
 
@@ -9,18 +9,14 @@ function start() {
     next.start();
     application = next;
   } catch (error) {
-    next.stop?.();
-    const startupError = error instanceof Error
-      ? error
-      : new Error(`Mirror Abyss启动失败：${error?.message ?? error?.type ?? String(error)}`, { cause: error });
-    console.error('[Mirror Abyss] startup failed', startupError);
-    throw startupError;
+    next.stop();
+    throw error;
   }
 }
 
-export function onActivate() { return start(); }
+export function onActivate() { start(); }
 
-export function onEnable() { return start(); }
+export function onEnable() { start(); }
 
 export function onDisable() {
   application?.stop();
