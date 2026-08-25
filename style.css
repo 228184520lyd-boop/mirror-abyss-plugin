@@ -176,6 +176,9 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
 .ma-check.is-fail { color: var(--ma-danger); }
 .ma-empty { padding: 12px 16px; color: var(--ma-muted); }
 .ma-chat-indicator { display: block; width: fit-content; max-width: min(82%, 360px); min-height: 34px; margin: 8px 0 2px auto; padding: 4px 10px; overflow: hidden; border: 1px solid #b8cad6; border-radius: 999px; background: rgba(255,255,255,.94); color: #31566f; font: 13px/1.4 system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ma-chat-indicator.is-latest { display: grid; justify-items: end; gap: 1px; border-radius: 12px; white-space: normal; }
+.ma-chat-indicator-main, .ma-chat-summary-reminder { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ma-chat-summary-reminder { color: var(--ma-muted); font-size: 11px; }
 .ma-chat-indicator.is-history { min-height: 26px; margin-top: 4px; padding-block: 2px; border-color: transparent; background: transparent; color: var(--ma-muted); font-size: 12px; }
 
 @keyframes ma-frame-flow {

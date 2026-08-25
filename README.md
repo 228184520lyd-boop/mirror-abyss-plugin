@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-版本：`4.0.23`
+版本：`4.0.24`
 
 Mirror Abyss 是 SillyTavern 的长期游玩记忆扩展。世界书是唯一长期事实源；模型负责语义整理，插件只负责固定协议、精确身份、UID、单一事务入口、任务编排和界面。
 
@@ -18,6 +18,11 @@ UI或宿主事件 → TaskQueue → Controller → Memory/Import/Migration → M
 - 世界设定粘贴文本与 TXT 共用“AI整理 → 预览 → 确认写入”链。
 - 世界设定、提取和总结均使用自然事实行协议，不使用额外对象外壳。
 - 每个条目展开后的关键词/召回设置提供“定义前”“定义后”和“设为/解除基石”；条目始终显示“可更新”或“基石只读”。
+
+## 4.0.24 功能
+
+- 最新 AI 正文下方的镜渊轻量状态条增加小号总结提醒：小总结明确显示在场景切换后触发，大总结显示当前已完成组数与第 N+1 组触发进度；有待处理场景或自动功能关闭时同步切换提示。
+- 自动运行设置明确说明小总结、大总结和大总结批次组数的真实触发关系，不改变既有场景分组、总结顺序或世界书写入链。
 
 ## 4.0.23 功能
 
@@ -118,7 +123,7 @@ UI或宿主事件 → TaskQueue → Controller → Memory/Import/Migration → M
 
 ## GitHub 安装
 
-将源码包内 `Mirror-Abyss-4.0.23/` 的内容放在 GitHub 仓库根目录；`manifest.json`、`index.js`、`app.js` 与 `style.css` 必须位于根目录，不能只上传 ZIP。然后在 SillyTavern 的“扩展 → 安装扩展”中粘贴该仓库地址。
+将源码包内 `Mirror-Abyss-4.0.24/` 的内容放在 GitHub 仓库根目录；`manifest.json`、`index.js`、`app.js` 与 `style.css` 必须位于根目录，不能只上传 ZIP。然后在 SillyTavern 的“扩展 → 安装扩展”中粘贴该仓库地址。
 
 `index.js` 是静态生命周期入口，加载构建产物 `app.js`；`style.css` 由宿主按清单加载。运行时不会请求 `src/`。请使用当前 SillyTavern release；项目没有虚构未经实机验证的最低客户端版本。
 
