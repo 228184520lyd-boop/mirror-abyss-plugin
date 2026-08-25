@@ -4,7 +4,7 @@
   "js": "index.js",
   "css": "style.css",
   "author": "228184520lyd-boop",
-  "version": "4.0.20",
+  "version": "4.0.21",
   "auto_update": true,
   "hooks": {
     "enable": "onEnable",
