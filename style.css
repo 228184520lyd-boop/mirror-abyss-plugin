@@ -66,9 +66,32 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
 .ma-scene-strip { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 11px 14px; border-left: 4px solid var(--ma-blue); background: var(--ma-soft); font-weight: 650; }
 .ma-help, .ma-main small { color: var(--ma-muted); }
 .ma-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ma-recovery-alert { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; padding: 13px 14px; overflow: hidden; border: 1px solid #e0a85f; border-left: 5px solid #c7781d; border-radius: 11px 8px 12px 9px; background: #fff8ec; color: #74420a; }
+.ma-recovery-alert.ma-section { display: block; overflow: visible; }
+.ma-recovery-copy { min-width: 0; flex: 1 1 auto; display: grid; gap: 3px; overflow-wrap: anywhere; }
+.ma-recovery-copy p { margin: 0; }
+.ma-recovery-copy .ma-recovery-reason { font-weight: 700; }
+.ma-recovery-copy small { color: #81511b; overflow-wrap: anywhere; }
+.ma-recovery-action { flex: 0 1 auto; max-width: 100%; border-color: #c7781d; color: #74420a; overflow-wrap: anywhere; }
+.ma-capability-write.is-quarantined { opacity: .42; }
 .ma-status { padding: 12px 14px; border-radius: 10px; background: var(--ma-soft); }
-.ma-status.is-error, .ma-error { color: var(--ma-danger); background: #fff1f1; }
-.ma-status.is-running, .ma-import-status.is-busy, .ma-stage-list .is-running { animation: ma-status-pulse 2.2s ease-in-out infinite; }
+.ma-status.is-error,
+.ma-status.is-state-error,
+.ma-status.is-summary-error,
+.ma-status.is-failed,
+.ma-status.is-recovery-required,
+.ma-error { color: var(--ma-danger); background: #fff1f1; }
+.ma-status.is-uncertain { color: #8b4d08; background: #fff8ec; }
+.ma-import-status.is-warning { color: #8b4d08; background: #fff8ec; }
+.ma-status.is-cancelled, .ma-status.is-compensated { color: var(--ma-muted); background: var(--ma-soft); }
+.ma-status.is-running,
+.ma-status.is-cancelling,
+.ma-status.is-audit,
+.ma-status.is-extract,
+.ma-status.is-import,
+.ma-status.is-worldbook,
+.ma-import-status.is-busy,
+.ma-stage-list .is-running { animation: ma-status-pulse 2.2s ease-in-out infinite; }
 .ma-queue { margin-bottom: 10px; padding: 10px 12px; border-left: 3px solid #90a9ba; background: var(--ma-soft); }
 .ma-queue.is-warning { border-left-color: #c87b21; color: #8b4d08; background: #fff8ec; }
 .ma-stage-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; margin-top: 10px; }
@@ -76,6 +99,8 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
 .ma-stage-list .is-success { color: #236b4b; background: #f1faf5; }
 .ma-stage-list .is-running { color: var(--ma-blue); background: #edf6fb; }
 .ma-stage-list .is-warning { color: #8b4d08; background: #fff8ec; }
+.ma-stage-list .is-error { color: var(--ma-danger); background: #fff1f1; }
+.ma-stage-list .is-cancelled { color: var(--ma-muted); background: var(--ma-soft); }
 .ma-write-receipt { margin: 10px 0 0; color: #236b4b; font-size: 14px; }
 .ma-activated-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--ma-line); }
 .ma-activated-row strong { margin-right: 4px; }
@@ -109,7 +134,7 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
 .ma-manage-more[open] { grid-column: 1 / -1; }
 .ma-manage-more-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
 .ma-manage-more-actions .ma-button { width: 100%; min-width: 0; padding-inline: 8px; white-space: nowrap; }
-.is-hidden { display: none !important; }
+.ma-manage-bar.is-hidden { display: none !important; }
 .ma-folder { margin: 0 0 18px; border-left: 4px solid #9bb7c8; }
 .ma-folder-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 48px; padding: 6px 0 6px 14px; }
 .ma-folder-head h2 { min-width: 0; margin: 0; overflow-wrap: anywhere; }
@@ -146,8 +171,9 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
 .ma-mode-option input { width: 20px; height: 20px; margin: 0; }
 .ma-keyword-field { display: grid; margin-top: 4px; }
 .ma-keyword-field .ma-input { margin: 6px 0; }
-.ma-insertion-settings { display: grid; grid-template-columns: minmax(120px, auto) repeat(2, minmax(0, 1fr)); align-items: center; gap: 8px; margin: 8px 0; }
-.ma-insertion-settings .ma-button { width: 100%; min-width: 0; padding-inline: 8px; white-space: nowrap; }
+.ma-insertion-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; gap: 8px; margin: 8px 0; }
+.ma-insertion-title { grid-column: 1 / -1; }
+.ma-insertion-settings .ma-button { width: 100%; min-width: 0; min-height: 48px; height: auto !important; max-height: none !important; padding: 10px 12px; white-space: nowrap; }
 .ma-recursion-settings .ma-check-field { flex: none; white-space: nowrap; }
 .ma-entry-settings-actions .ma-button { flex: none; min-width: max-content; padding-inline: 10px; white-space: nowrap; }
 .ma-check-field { min-height: 44px; display: flex; align-items: center; gap: 10px; }
@@ -175,10 +201,10 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
 .ma-check.is-pass { color: #236b4b; }
 .ma-check.is-fail { color: var(--ma-danger); }
 .ma-empty { padding: 12px 16px; color: var(--ma-muted); }
-.ma-chat-indicator { display: block; width: fit-content; max-width: min(82%, 360px); min-height: 34px; margin: 8px 0 2px auto; padding: 4px 10px; overflow: hidden; border: 1px solid #b8cad6; border-radius: 999px; background: rgba(255,255,255,.94); color: #31566f; font: 13px/1.4 system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-.ma-chat-indicator.is-latest { display: grid; justify-items: end; gap: 1px; border-radius: 12px; white-space: normal; }
-.ma-chat-indicator-main, .ma-chat-summary-reminder { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ma-chat-summary-reminder { color: var(--ma-muted); font-size: 11px; }
+.ma-chat-indicator { box-sizing: border-box; display: block; width: fit-content; max-width: min(82%, 360px); min-width: 0; min-height: 34px; height: auto !important; max-height: none !important; margin: 8px 0 2px auto; padding: 4px 10px; overflow: hidden; border: 1px solid #b8cad6; border-radius: 999px; background: rgba(255,255,255,.94); color: #31566f; font: 13px/1.4 system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ma-chat-indicator.is-latest { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 1px; padding-block: 5px; border-radius: 12px; white-space: normal; }
+.ma-chat-indicator-main, .ma-chat-summary-reminder { display: block; width: 100%; min-width: 0; max-width: 100%; overflow: hidden; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.ma-chat-summary-reminder { color: var(--ma-muted); font-size: 11px; line-height: 1.35; }
 .ma-chat-indicator.is-history { min-height: 26px; margin-top: 4px; padding-block: 2px; border-color: transparent; background: transparent; color: var(--ma-muted); font-size: 12px; }
 
 @keyframes ma-frame-flow {
@@ -212,6 +238,8 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
   .ma-button, .ma-button.ma-mini { min-height: 44px; }
   .ma-manage-actions, .ma-manage-more-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ma-action-grid { grid-template-columns: 1fr 1fr; }
+  .ma-recovery-alert { align-items: stretch; flex-direction: column; overflow: visible; }
+  .ma-recovery-alert .ma-recovery-action { width: 100%; }
   .ma-scene-strip { flex-direction: column; gap: 2px; }
   .ma-folder-actions,
   .ma-detail-toolbar,

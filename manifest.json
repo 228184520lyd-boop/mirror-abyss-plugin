@@ -1,15 +1,16 @@
 {
-  "display_name": "Mirror Abyss / 镜渊",
-  "loading_order": 10,
-  "js": "index.js",
-  "css": "style.css",
-  "author": "228184520lyd-boop",
-  "version": "4.0.24",
-  "auto_update": true,
-  "hooks": {
-    "enable": "onEnable",
-    "disable": "onDisable",
-    "activate": "onActivate"
-  },
-  "description": "世界书唯一事实源｜单队列UID事务｜移动端游戏档案"
+    "display_name": "Mirror Abyss / 镜渊",
+    "loading_order": 10,
+    "js": "index.js",
+    "css": "style.css",
+    "author": "228184520lyd-boop",
+    "version": "4.0.32-recovered.1",
+    "minimum_client_version": "1.18.0",
+    "auto_update": false,
+    "hooks": {
+        "enable": "onEnable",
+        "disable": "onDisable",
+        "activate": "onActivate"
+    },
+    "description": "世界书唯一事实源｜单队列UID事务｜移动端游戏档案"
 }
