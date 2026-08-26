@@ -19,7 +19,7 @@ html.ma-panel-open { overflow: hidden; }
 html.ma-panel-open .ma-launcher { opacity: 0; pointer-events: none; }
 .ma-root, .ma-root * { box-sizing: border-box; }
 .ma-root { color: var(--ma-ink); font: 16px/1.6 system-ui, -apple-system, "Noto Sans SC", sans-serif; }
-.ma-button { position: relative; min-height: 44px; padding: 8px 14px; border: 1px solid var(--ma-line); border-radius: 10px 7px 11px 8px; background: color-mix(in srgb, var(--ma-skin-raised) 86%, transparent); color: var(--ma-ink); font: inherit; font-weight: 650; cursor: pointer; }
+.ma-button { position: relative; min-height: 44px; padding: 8px 14px; border: 1px solid var(--ma-line); border-radius: 10px 7px 11px 8px; background: color-mix(in srgb, var(--ma-skin-raised) 86%, transparent); color: var(--ma-ink); font: inherit; font-weight: 650; cursor: pointer; touch-action: manipulation; }
 .ma-button:active { transform: translateY(1px); }
 .ma-button:disabled { opacity: .5; cursor: default; transform: none; }
 .ma-button.is-busy { cursor: progress; opacity: .72; background: color-mix(in srgb, var(--ma-soft) 82%, var(--ma-blue) 18%); box-shadow: inset 0 0 0 1px rgba(35,111,155,.25); }
@@ -56,6 +56,7 @@ textarea.ma-dialog-input { min-height: 120px; resize: vertical; }
 .ma-sigil { color: var(--ma-blue); font-size: 24px; text-shadow: 0 0 8px rgba(105,191,209,.32); animation: ma-sigil-breathe 3.8s ease-in-out infinite; }
 .ma-tabs { display: grid; grid-template-columns: repeat(3, 1fr); border-bottom: 1px solid var(--ma-line); background: rgba(250,252,253,.78); box-shadow: inset 0 -1px rgba(182,145,85,.1); }
 .ma-tabs .ma-button { border: 0; border-radius: 0; border-bottom: 3px solid transparent; color: var(--ma-muted); }
+.ma-tabs .ma-button:active { background: color-mix(in srgb, var(--ma-soft) 88%, var(--ma-blue) 12%); }
 .ma-tabs .ma-button.is-active { border-bottom-color: var(--ma-blue); background: linear-gradient(180deg, color-mix(in srgb, var(--ma-skin-raised) 90%, transparent), color-mix(in srgb, var(--ma-soft) 92%, var(--ma-blue) 8%)); color: var(--ma-blue); text-shadow: 0 0 12px rgba(105,191,209,.2); }
 .ma-main { min-width: 0; min-height: 0; overflow: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 18px; background: color-mix(in srgb, var(--ma-skin) 55%, transparent); }
 .ma-main h1, .ma-main h2, .ma-main h3, .ma-main p { margin-top: 0; }
