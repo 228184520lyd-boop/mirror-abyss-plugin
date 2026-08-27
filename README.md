@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-版本：`4.0.32-recovered.8`
+版本：`4.0.34`
 
 Mirror Abyss 是 SillyTavern 的长期游玩记忆扩展。世界书是唯一长期事实源；模型负责语义整理，插件只负责固定协议、精确身份、UID、单一事务入口、任务编排和界面。
 
@@ -20,54 +20,32 @@ UI或宿主事件 → RuntimeLease / ContextLease → Controller → OperationCo
 - 世界设定、提取和总结均使用自然事实行协议，不使用额外对象外壳。
 - 每个条目展开后的关键词/召回设置提供“定义前”“定义后”和“设为/解除基石”；基石只阻止 AI 自动覆盖与普通删除，玩家仍可直接编辑正文和设置。
 
-## 4.0.32-recovered.8 防御边界收口
+## 4.0.34 独立复核根因闭合
 
-- 新增并固定 `DefenseLayer / DefenseErrorPolicy`：应用层所有输入资格、作用域、stale/conflict、恢复隔离、错误资格与模型协议校验只在该层定义；提取、小总结、大总结、导入、迁移、Reset、Diagnostics、Controller 不再各自发展防御分支。
-- 新增 `SemanticWorker` 作为唯一语义工作边界。提取、小总结、大总结、审核与导入只负责冻结输入 → 调模型 → 返回经 Defense 验证的结构结果；它不持有 Host 状态、世界书事务、Recovery 或 revision 提交判断。
-- 删除协议失败后的自动二次建模；只保留网络、502/503/504、timeout 与空最终文本的一次有限传输重试。模型输出格式不合法时直接结束，不由代码重新教模型改答案。
-- 删除提取协议失败后的“抢救当前场景”旁路，以及模型等待期间用整本旧世界书 digest 否决提取的过宽冲突域。权威提交安全只由统一事务与 Defense pre-commit 边界负责。
-- 新事实协议不再要求模型输出实际写入链从未消费的“建立/变化/结束”判断；旧七段事实行仅作为读取兼容。
-- Reset、Recovery command 与 Diagnostics 不再自行构造 `recoveryRequired / retryable / compensated / committed` 防御标签；这些资格统一由 DefenseErrorPolicy 产生。
-- `MemoryEntryService` 不再持有模型权限；连接测试归 Diagnostics 传输探针。所有应用层模型协议解析只能通过 DefenseLayer。
-- 新增架构防回退合同：业务模块不能直接写恢复/重试/补偿标签，SemanticWorker/Diagnostics 不能绕过 DefenseLayer 解析模型协议；同时覆盖跨聊天 origin 写回缺少宿主 API 时的明确 `METADATA_ORIGIN_API` 出口。
+- 自动建书不再直接调用第二个世界书保存原语。`WorldbookRepository` 现在拥有唯一 `saveWorldInfo()` 原语；创建空世界书、普通事务提交和回滚都从这一适配器边界进入。
+- 自动建书的“创建 → 权威书目/正文确认 → 绑定”成为同一可恢复生命周期。创建一旦可能落盘就携带 `kind=provision` 恢复回执；绑定未提交时只删除仍保持创建 revision 的未绑定空书，玩家已经修改的候选书绝不自动删除；绑定结果无法唯一判定时进入现有 `RecoveryRegistry`，不再把孤儿书当作允许状态。
+- `RecoveryRegistry` 在同一聊天内跨 worldbook scope 查找持久恢复证据，并同时包含 active/archive 回执；这只扩大恢复证据登记处的可见范围，普通运行态与 UI 仍只读取当前 scope 的 committed snapshot。
+- 提取在模型调用前冻结完整权威世界书 revision，提交时将 `opened.digest` 传给现有 `WorldbookRepository.transact(expectedDigest)`。模型等待期间世界书被玩家或宿主修改时，旧模型结果以 `STALE_WRITE` 停止，不能再重新读取 live 状态后覆盖新事实。
+- 新增防回退测试：生产源码只允许一个 raw worldbook writer；自动建书失败必须有补偿或 provision recovery 出口；跨 scope/归档恢复证据仍可发现并清除；提取模型等待期间的玩家世界书修改必须被 CAS 保留。
 
-## 4.0.32-recovered.7 总结链修复
+## 4.0.33 统一模型覆盖与职责闭合
 
-- 手动“完整处理”与自动处理统一执行场景关闭后的自动总结调度；检测到场景变化并形成 `closedGroups` 后，不再因任务入口是手动触发而跳过小总结。“仅提取”仍只执行提取。
-- 大总结把成功小总结 artifact 视为不可变历史来源；历史快照与当前世界书复用同一 UID 时，不再用当前 UID 内容否定旧快照，也不会删除或覆盖当前实时条目。
-- 同一 UID 出现在多个历史小总结 artifact 时保留为多个独立来源快照，不再在大总结规划阶段按 UID 折叠掉历史阶段。
-- 模型请求成功但未产生最终文本的 `MODEL_EMPTY` 现在与宿主空响应采用同一有限重试边界；连续失败仍作为模型层失败结束，不进入写入事务。
+- `WorldbookScope` 只保存世界书作用域身份与 revision；长期剧情正文只存在于当前聊天绑定世界书。场景组只保存 `groupId + revision + UID 集合` 等机械坐标，不保存条目正文副本。
+- 提取模型固定接收提取前完整权威世界书、本轮玩家输入和当前 AI 正文；系统不再先按关键词或数量挑选“相关条目”。
+- 小总结、大总结、玩家选中总结与人工合并共用同一完整批次整理协议：系统冻结当前权威 UID → 一次请求发送全部完整条目 → 协议校验 → 单一世界书事务提交。小总结不再拥有逐来源第二协议，也不存在可成功返回的空总结。 小总结提交并完成运行状态 finalize 后形成已结算组；同一自动父操作只在小总结耐久闭合后刷新状态并串行评估大总结。大总结只从已结算组取得当前仍存在的 UID，再从当前权威世界书读取完整正文。
+- 总结格式失败只允许一次干净协议重试；第二次请求携带第一次的具体协议错误。模型请求、协议失败与事务提交互不重跑。
+- `SemanticWorker` 只持有冻结输入、Prompt、模型调用与协议结果，不读取 Host 运行状态，不拥有 UID stale/collision/revision/recovery/UI/事务判断。
+- 所有持久副作用仍由 `OperationCoordinator → EffectEnvelope` 单 mutation lane 执行；宿主世界书、metadata、chat、settings 原语分别只存在于 adapter 所有者。
+- `RecoveryRegistry` 是唯一恢复证据源；Import、Migration、Reset、Diagnostics 的不确定提交或补偿失败均汇入同一 Registry。
+- `AuthoritativeCommitModel` 只在顶层效果闭合后发布 committed snapshot；`RuntimeReadModel` 是 UI 唯一运行态读源，世界书页的运行徽标也从同一 committed snapshot 投影。
+- `RevisionedReconcile` 是 UID、场景组和文件夹派生投影唯一同步路径。外部世界书更新与排队期间的文件夹布局变化都在同一 mutation lane 内按最新 revision 重算。
+- 玩家明确人工合并或删除时在同一权威事务内解除所选条目的基石/焦点保护后执行；自动流程仍尊重保护。
+- `WORLDINFO_UPDATED` 的 reconcile 失败不再被事件处理器吞掉：直接调用得到真实失败，宿主后台事件由统一后台错误出口接管并发布失败。
+- 新增统一模型防回退测试，禁止剧情正文副本、提取 Top-N 语义筛选、小总结第二协议、UI live-state 旁读、第二 EffectEnvelope 入口及 adapter 外持久化原语重新进入生产源码。
 
+## 4.0.32-recovered.8 基线（已由 4.0.33 收口替代）
 
-## 当前权威提交收口
-
-- 所有持久副作用统一进入一个 `OperationCoordinator` mutation lane；Settings／文件夹布局不再使用队列外同步 guard，因此不会再插入 Reset、恢复或其他正在执行的持久事务。
-- 新增 `AuthoritativeCommitModel`：任务内部的 staged metadata、worldbook binding 与 Settings 工作副本在顶层任务完成前不发布；`RuntimeReadModel` 只读取最后一份 committed snapshot。
-- `WORLDINFO_UPDATED` 在 Recovery fence 存在时登记 revisioned reconcile debt，解围后自动补跑，不再丢失持久同步。
-- UID／文件夹 reconcile 绑定世界书 revision；同步期间 revision 推进时从同步前基线按最新权威版本重算，避免陈旧快照造成不可逆 prune。
-- 统一链固定为：`Single Mutation Lane → Stage → Authority Commit → Committed Snapshot → Revisioned Reconcile`。
-
-## 4.0.32-recovered.5 统一模型收口
-
-- 世界书相关运行元数据改为按稳定 `scopeId(owner)` 分区，每个分区携带独立 `owner + revision`；事务回执记录提交前／后 revision，Undo、补偿与恢复会把分区推进到回滚后的权威 revision，同一聊天改绑世界书不再串用旧场景、组、历史证据或收据。
-- 新增唯一 `RecoveryRegistry`。持久恢复回执、authority uncertainty、已提交补偿失败统一登记；恢复证据自身无法保存时只由 Registry 保存同一份易失兜底。`lastFailedTask` 只保留明确未提交且可安全重试的普通失败，Import/Migration 不再维护私有 `uncertain / undoReceipt`。
-- 新增唯一 `RuntimeReadModel`。Run、ChatIndicator、Notes、Maintenance 只从该读模型获取运行状态、Outcome、Settings、恢复、激活 UID 与 Undo；陈旧 running 状态只在读模型中消解，不篡改持久历史；不同 UI 不再各自拼接终态。
-- 新增 `EffectEnvelope`。任何会改变权威数据、作用域运行状态、恢复状态或 Settings 持久投影的路径都先经过同一恢复栅栏；`WORLDINFO_UPDATED` 只允许读取穿过围栏，UID／文件夹 reconcile 在真正写入前重新进入效果边界。导入预览、迁移扫描、API 测试保持纯读取旁路。
-- 状态与消息阶段事件仍只在聊天元数据保存成功后发布；同时 RuntimeReadModel 已改为只读 committed snapshot，因此即使其他 UI 刷新恰好发生在宿主保存窗口，也不会看到 staged metadata。恢复期间文件夹布局、自动化开关、连接配置等 Settings 写入统一隔离。
-
-## 4.0.32-recovered.4 恢复内容
-
-- 当前聊天运行元数据与世界书绑定在宿主首次“成功返回但权威仍为提交前内容”时，只重放一次相同 `saveMetadata()`，不重跑状态变换或建书链；聊天身份变化、保存报错、混合态与回读失败均不盲目重试。
-- 世界书事务在整本保存前增加最终权威 before-image 校验；玩家在模型／事务等待窗口内保存的条目优先，旧插件草稿以 `STALE_WRITE` 停止，不再覆盖玩家内容。
-- AI 正文提交允许目标之后出现新的玩家尾部消息；失败清理仅在本地目标仍等于插件 staged image 时恢复 before-image，同一正文被玩家改写后不再回滚玩家文字。
-- 手记页把权威条目、选择、展开项、激活 UID、能力围栏和 DOM 作为一个视图原子发布；过期读取不能污染可见页面，新建文件夹后的条目不会因旧投影消失。正文草稿存在时，全页与文件夹刷新延后到保存／取消之后。
-- 运行／手记／维护标题栏在点击当下立即切换选中态并标记读取中，不再等待世界书等权威页面数据返回；正文区域仍在离屏完成后原子替换。移动端标题按钮使用即时触控语义，避免把安全读取等待表现成标题栏卡死。
-- 玩家字段操作按所有权收缩并发保护：基石、主焦点和定义位置合并到最新正文；总结只校验实际参与来源，无关条目更新不再让模型结果整本作废；来源消息变化只取消依赖该来源的处理／总结／回滚任务，不取消无关的玩家手动世界书操作。
-
-- 以完成实机测试的 4.0.31 为基线，恢复目前唯一确认的后续修复：来源消息触发回滚后，即使玩家频繁切换聊天导致旧任务取消，回滚批次仍按完整聊天身份保留；返回原聊天时会通过同一串行队列续跑一次，不会在其他聊天执行或永久丢失。
-- 修复实机首次提取在世界书保存后第一次权威回读仍为提交前内容时直接失败：同一事务只重复一次完全相同的整本保存与权威回读，不重新调用模型、不重新执行提取变换；第三态和回读失败仍进入原恢复围栏。
-- 修复外部世界书同步持有旧文件夹投影并覆盖刚完成移动的竞态；裁剪前重新读取最新设置，只删除权威世界书中确已不存在的 UID。新建、移动、改名、折叠与排序只重绘当前已挂载手记列表，不再为纯文件夹布局重新读取整本世界书。
-- 这是根据已确认问题重建的恢复版，不声称与断线远程会话中尚未取回的原始后续包逐字节相同，也不包含尚未回忆或核实的其他改动。
+4.0.32-recovered.8 建立了 `DefenseLayer`、`SemanticWorker`、`RecoveryRegistry`、`AuthoritativeCommitModel`、`RuntimeReadModel`、`EffectEnvelope` 和 revisioned reconcile 的统一模型骨架；4.0.33 删除仍在这些模型旁边运行的旧职责与第二状态源，并以当前冻结架构为唯一维护合同。
 
 ## 4.0.31 功能
 
@@ -91,10 +69,8 @@ UI或宿主事件 → RuntimeLease / ContextLease → Controller → OperationCo
 
 ## 4.0.28 功能
 
-- 小总结提示词改为“逐条原位压缩”的正向说明，并给出人物身份、经历、当前状态三栏完整输入／输出示范供模型模仿；精确来源、身份与栏目完整性仍由原协议边界校验。
 - “角色定义位置”标题独占一行，“定义前 / 定义后”各占一半可用宽度；按钮保持原字号，边框提高到 48px 最小高度并可由内容撑开，不再出现框小于文字。
 - 所有有副作用的任务以 `TaskQueue.enqueue` 为开头，以事实回读、运行状态或恢复回执全部落定为结尾；人工任务优先于自动总结，自动任务不能让人工操作饥饿。外部世界书同步、迁移扫描和失败总结重试不再在队列外留下迟到步骤。
-- 小总结先以 `groupId + revision + UID 集合` 校验来源，完成世界书提交和运行状态 finalize 后才发布不可变的成功产物；大总结只能消费这些已完成产物，并在提交前后重新校验同一批次。同一父操作只会在小总结耐久闭合后串行评估大总结；小总结失败、取消、过期、命中屏障或结果不确定时立即截断，不把父任务覆盖为成功。自动失败重试复用原逻辑操作身份和冻结输入，不重新取样或制造第二份副作用。
 - 同一 JavaScript realm 只允许一个 `RuntimeLease`；跨适配器实例的世界书创建、书级写入与聊天元数据保存共享锁。取消若跨过外部提交点，必须完成权威对账或补偿，不能直接报成未写入的取消。
 - 正文、聊天运行元数据或世界书绑定保存后无法确认时，会用提交前／预期快照建立当前 realm 的统一写入围栏；运行、手记和维护页禁用同一组 `WRITE` 能力，只有运行页保留一个“核对并恢复”出口。“仅审核”也属于 `WRITE`，因为审核不通过时会修正并保存 AI 正文，不能在消息提交待核对时旁路执行。权威结果为已提交或未提交时修复本地投影并解围，混合态或核对读取失败继续隔离。
 - Edit 与已存在候选的 Swipe 使用 `target` 消息稳定模式，允许目标之后继续追加消息；Delete 使用 `changed` 模式确认删除边界；严格 `exact` 模式保留给必须冻结完整序列的调用。三种模式都要求连续两次一致的权威结果。尚未生成正文的 overswipe 只等待旧候选回滚，新正文仍由唯一的 `MESSAGE_RECEIVED` 链处理。
@@ -103,9 +79,8 @@ UI或宿主事件 → RuntimeLease / ContextLease → Controller → OperationCo
 
 ## 4.0.26 功能
 
-- 小总结现在严格逐条目压缩：每个输出只对应一个来源，类型和稳定名称必须逐字不变，来源中每个已有栏目都必须保留；人物、场景和物品事实不能再被转移进事件条目，也不能把角色压到只剩“当前状态”。
 - “撤回”统一选择当前世界书最新一笔可逆提交，自动提取、自动总结、手动总结、导入与玩家编辑按实际落盘顺序逐次逆转；后写的自动小总结会先撤回，不再拿旧回执撞上已变化条目。
-- 基石改为单纯的自动写保护。玩家在上锁期间可修改正文、召回、主焦点、角色定义位置并手动校准 ST 插入顺序；这些操作直接进入一次权威事务，不再先做一遍重复世界书读取。普通删除仍需解锁，危险确认后的完整重置可一次清理全部管理条目。
+- 基石改为单纯的自动写保护。玩家在上锁期间可修改正文、召回、主焦点、角色定义位置并手动校准 ST 插入顺序；这些操作直接进入一次权威事务，不再先做一遍重复世界书读取。玩家明确删除在同一事务内解除所选保护后执行，危险确认后的完整重置可一次清理全部管理条目。
 - 最新 AI 正文下方的两行轻量状态拥有独立自适应高度边框，不再继承宿主按钮固定高度而让第二行文字溢出。
 - 对审核、提取、总结、导入、条目管理、基石、插入、迁移、诊断、撤回和重置做了端到端路径核对；实际写入仍只经过现有 Controller、业务服务与 `WorldbookRepository`，没有增加第二套事实、保存或撤回链。
 
@@ -223,11 +198,11 @@ UI或宿主事件 → RuntimeLease / ContextLease → Controller → OperationCo
 
 每个 SillyTavern 实例只能保留一个镜渊副本。停止 SillyTavern 后，同时检查用户目录 `data/<handle>/extensions/` 与全局目录 `public/scripts/extensions/third-party/`，按大小写不敏感方式移走所有旧副本、版本号目录和大小写变体，只保留一个名为 `mirror-abyss/` 的目录；不要同时安装用户副本与全局副本。随后重启 SillyTavern 并强制刷新页面。
 
-SillyTavern 1.18.0 的扩展“发现”顺序与浏览器静态资源“实际取文件”顺序并不等价：全局 `public/` 静态路由先于用户扩展回退路由注册。因此，同名全局旧副本存在时，扩展管理器即使把用户副本列为 `local`，浏览器仍可能取得全局旧版的 `manifest.json`、`index.js` 和 `app.js`。用户目录不能作为同名全局副本的覆盖升级层；必须先移走全局旧副本再启动。启动后应直接打开实际服务地址下的 `/scripts/extensions/third-party/mirror-abyss/manifest.json`，确认 `version` 为 `4.0.32-recovered.8`；手工部署包还应为 `auto_update=false`，并确认页面中只出现一个镜渊 root、launcher 与聊天状态入口。
+SillyTavern 1.18.0 的扩展“发现”顺序与浏览器静态资源“实际取文件”顺序并不等价：全局 `public/` 静态路由先于用户扩展回退路由注册。因此，同名全局旧副本存在时，扩展管理器即使把用户副本列为 `local`，浏览器仍可能取得全局旧版的 `manifest.json`、`index.js` 和 `app.js`。用户目录不能作为同名全局副本的覆盖升级层；必须先移走全局旧副本再启动。启动后应直接打开实际服务地址下的 `/scripts/extensions/third-party/mirror-abyss/manifest.json`，确认 `version` 为 `4.0.34`；手工部署包还应为 `auto_update=false`，并确认页面中只出现一个镜渊 root、launcher 与聊天状态入口。
 
 ## GitHub（源码仓库）安装
 
-将源码包内 `Mirror-Abyss-4.0.32-recovered.8/` 的内容放在 GitHub 仓库根目录；`manifest.json`、`index.js`、`app.js` 与 `style.css` 必须位于根目录，不能只上传 ZIP。然后在 SillyTavern 的“扩展 → 安装扩展”中粘贴该仓库地址。
+将源码包内 `Mirror-Abyss-4.0.34/` 的内容放在 GitHub 仓库根目录；`manifest.json`、`index.js`、`app.js` 与 `style.css` 必须位于根目录，不能只上传 ZIP。然后在 SillyTavern 的“扩展 → 安装扩展”中粘贴该仓库地址。
 
 源码仓库的 `manifest.json` 保持 `auto_update=true`，供 SillyTavern 的 Git 安装／更新流程使用。`index.js` 是静态生命周期入口，加载构建产物 `app.js`；`style.css` 由宿主按清单加载，运行时不会请求 `src/`。
 
@@ -269,6 +244,6 @@ npm run package
 npm run package -- --output /path/on/posix-filesystem/mirror-abyss-release
 ```
 
-4.0.32-recovered.8 的源码、运行文件或文档只要有任一字节变化，就必须重新执行本版本的构建、校验与打包并重算 SHA-256；不得复用 4.0.31 或其他候选的 ZIP／哈希。静态检查、单元测试和候选打包通过都不能写成 SillyTavern 实机 PASS，最终实机结论只能来自源码冻结后的真实环境验收记录。
+4.0.34 的源码、运行文件或文档只要有任一字节变化，就必须重新执行本版本的构建、校验与打包并重算 SHA-256；不得复用 4.0.31 或其他候选的 ZIP／哈希。静态检查、单元测试和候选打包通过都不能写成 SillyTavern 实机 PASS，最终实机结论只能来自源码冻结后的真实环境验收记录。
 
 不要直接编辑根目录 `app.js`；它由 `src/` 生成。架构边界和修改路由见 `ARCHITECTURE.md`，错误定性见 `ERROR-CATALOG.md`。维护页的“三轮完整验收”会调用当前模型路由并执行可回滚的临时世界书事务，因此会产生少量模型请求。

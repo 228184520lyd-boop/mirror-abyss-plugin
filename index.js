@@ -1,4 +1,4 @@
-import { createApplication } from './app.js?v=4.0.32-recovered.8';
+import { createApplication } from './app.js?v=4.0.34';
 
 export function createLifecycleHooks(applicationFactory = createApplication, logger = console) {
   let application;
