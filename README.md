@@ -1,13 +1,13 @@
 # Mirror Abyss / 镜渊
 
-版本：`4.0.32-recovered.6`
+版本：`4.0.32-recovered.8`
 
 Mirror Abyss 是 SillyTavern 的长期游玩记忆扩展。世界书是唯一长期事实源；模型负责语义整理，插件只负责固定协议、精确身份、UID、单一事务入口、任务编排和界面。
 
 ## 单一链路
 
 ```text
-UI或宿主事件 → RuntimeLease / ContextLease → Controller → OperationCoordinator → EffectEnvelope → 业务服务 → HostAdapter/WorldbookRepository → AuthorityOutcome三态 → WorldbookScope / RecoveryRegistry → RuntimeReadModel → UI
+UI或宿主事件 → RuntimeLease / ContextLease → Controller → OperationCoordinator → EffectEnvelope → 业务服务 → HostAdapter/WorldbookRepository → AuthorityOutcome三态 → AuthoritativeCommitModel → RuntimeReadModel → UI
 ```
 
 - 提示词、协议校验、正文栏目和界面类型均读取 `src/core/schema.js`。
@@ -20,12 +20,32 @@ UI或宿主事件 → RuntimeLease / ContextLease → Controller → OperationCo
 - 世界设定、提取和总结均使用自然事实行协议，不使用额外对象外壳。
 - 每个条目展开后的关键词/召回设置提供“定义前”“定义后”和“设为/解除基石”；基石只阻止 AI 自动覆盖与普通删除，玩家仍可直接编辑正文和设置。
 
-## 4.0.32-recovered.6 总结链修复
+## 4.0.32-recovered.8 防御边界收口
+
+- 新增并固定 `DefenseLayer / DefenseErrorPolicy`：应用层所有输入资格、作用域、stale/conflict、恢复隔离、错误资格与模型协议校验只在该层定义；提取、小总结、大总结、导入、迁移、Reset、Diagnostics、Controller 不再各自发展防御分支。
+- 新增 `SemanticWorker` 作为唯一语义工作边界。提取、小总结、大总结、审核与导入只负责冻结输入 → 调模型 → 返回经 Defense 验证的结构结果；它不持有 Host 状态、世界书事务、Recovery 或 revision 提交判断。
+- 删除协议失败后的自动二次建模；只保留网络、502/503/504、timeout 与空最终文本的一次有限传输重试。模型输出格式不合法时直接结束，不由代码重新教模型改答案。
+- 删除提取协议失败后的“抢救当前场景”旁路，以及模型等待期间用整本旧世界书 digest 否决提取的过宽冲突域。权威提交安全只由统一事务与 Defense pre-commit 边界负责。
+- 新事实协议不再要求模型输出实际写入链从未消费的“建立/变化/结束”判断；旧七段事实行仅作为读取兼容。
+- Reset、Recovery command 与 Diagnostics 不再自行构造 `recoveryRequired / retryable / compensated / committed` 防御标签；这些资格统一由 DefenseErrorPolicy 产生。
+- `MemoryEntryService` 不再持有模型权限；连接测试归 Diagnostics 传输探针。所有应用层模型协议解析只能通过 DefenseLayer。
+- 新增架构防回退合同：业务模块不能直接写恢复/重试/补偿标签，SemanticWorker/Diagnostics 不能绕过 DefenseLayer 解析模型协议；同时覆盖跨聊天 origin 写回缺少宿主 API 时的明确 `METADATA_ORIGIN_API` 出口。
+
+## 4.0.32-recovered.7 总结链修复
 
 - 手动“完整处理”与自动处理统一执行场景关闭后的自动总结调度；检测到场景变化并形成 `closedGroups` 后，不再因任务入口是手动触发而跳过小总结。“仅提取”仍只执行提取。
 - 大总结把成功小总结 artifact 视为不可变历史来源；历史快照与当前世界书复用同一 UID 时，不再用当前 UID 内容否定旧快照，也不会删除或覆盖当前实时条目。
 - 同一 UID 出现在多个历史小总结 artifact 时保留为多个独立来源快照，不再在大总结规划阶段按 UID 折叠掉历史阶段。
 - 模型请求成功但未产生最终文本的 `MODEL_EMPTY` 现在与宿主空响应采用同一有限重试边界；连续失败仍作为模型层失败结束，不进入写入事务。
+
+
+## 当前权威提交收口
+
+- 所有持久副作用统一进入一个 `OperationCoordinator` mutation lane；Settings／文件夹布局不再使用队列外同步 guard，因此不会再插入 Reset、恢复或其他正在执行的持久事务。
+- 新增 `AuthoritativeCommitModel`：任务内部的 staged metadata、worldbook binding 与 Settings 工作副本在顶层任务完成前不发布；`RuntimeReadModel` 只读取最后一份 committed snapshot。
+- `WORLDINFO_UPDATED` 在 Recovery fence 存在时登记 revisioned reconcile debt，解围后自动补跑，不再丢失持久同步。
+- UID／文件夹 reconcile 绑定世界书 revision；同步期间 revision 推进时从同步前基线按最新权威版本重算，避免陈旧快照造成不可逆 prune。
+- 统一链固定为：`Single Mutation Lane → Stage → Authority Commit → Committed Snapshot → Revisioned Reconcile`。
 
 ## 4.0.32-recovered.5 统一模型收口
 
@@ -33,7 +53,7 @@ UI或宿主事件 → RuntimeLease / ContextLease → Controller → OperationCo
 - 新增唯一 `RecoveryRegistry`。持久恢复回执、authority uncertainty、已提交补偿失败统一登记；恢复证据自身无法保存时只由 Registry 保存同一份易失兜底。`lastFailedTask` 只保留明确未提交且可安全重试的普通失败，Import/Migration 不再维护私有 `uncertain / undoReceipt`。
 - 新增唯一 `RuntimeReadModel`。Run、ChatIndicator、Notes、Maintenance 只从该读模型获取运行状态、Outcome、Settings、恢复、激活 UID 与 Undo；陈旧 running 状态只在读模型中消解，不篡改持久历史；不同 UI 不再各自拼接终态。
 - 新增 `EffectEnvelope`。任何会改变权威数据、作用域运行状态、恢复状态或 Settings 持久投影的路径都先经过同一恢复栅栏；`WORLDINFO_UPDATED` 只允许读取穿过围栏，UID／文件夹 reconcile 在真正写入前重新进入效果边界。导入预览、迁移扫描、API 测试保持纯读取旁路。
-- 状态与消息阶段事件改为在聊天元数据保存成功后才发布；UI 不会先看到尚未成为权威运行状态的投影。恢复期间文件夹布局、自动化开关、连接配置等 Settings 写入统一隔离。
+- 状态与消息阶段事件仍只在聊天元数据保存成功后发布；同时 RuntimeReadModel 已改为只读 committed snapshot，因此即使其他 UI 刷新恰好发生在宿主保存窗口，也不会看到 staged metadata。恢复期间文件夹布局、自动化开关、连接配置等 Settings 写入统一隔离。
 
 ## 4.0.32-recovered.4 恢复内容
 
@@ -203,11 +223,11 @@ UI或宿主事件 → RuntimeLease / ContextLease → Controller → OperationCo
 
 每个 SillyTavern 实例只能保留一个镜渊副本。停止 SillyTavern 后，同时检查用户目录 `data/<handle>/extensions/` 与全局目录 `public/scripts/extensions/third-party/`，按大小写不敏感方式移走所有旧副本、版本号目录和大小写变体，只保留一个名为 `mirror-abyss/` 的目录；不要同时安装用户副本与全局副本。随后重启 SillyTavern 并强制刷新页面。
 
-SillyTavern 1.18.0 的扩展“发现”顺序与浏览器静态资源“实际取文件”顺序并不等价：全局 `public/` 静态路由先于用户扩展回退路由注册。因此，同名全局旧副本存在时，扩展管理器即使把用户副本列为 `local`，浏览器仍可能取得全局旧版的 `manifest.json`、`index.js` 和 `app.js`。用户目录不能作为同名全局副本的覆盖升级层；必须先移走全局旧副本再启动。启动后应直接打开实际服务地址下的 `/scripts/extensions/third-party/mirror-abyss/manifest.json`，确认 `version` 为 `4.0.32-recovered.6`；手工部署包还应为 `auto_update=false`，并确认页面中只出现一个镜渊 root、launcher 与聊天状态入口。
+SillyTavern 1.18.0 的扩展“发现”顺序与浏览器静态资源“实际取文件”顺序并不等价：全局 `public/` 静态路由先于用户扩展回退路由注册。因此，同名全局旧副本存在时，扩展管理器即使把用户副本列为 `local`，浏览器仍可能取得全局旧版的 `manifest.json`、`index.js` 和 `app.js`。用户目录不能作为同名全局副本的覆盖升级层；必须先移走全局旧副本再启动。启动后应直接打开实际服务地址下的 `/scripts/extensions/third-party/mirror-abyss/manifest.json`，确认 `version` 为 `4.0.32-recovered.8`；手工部署包还应为 `auto_update=false`，并确认页面中只出现一个镜渊 root、launcher 与聊天状态入口。
 
 ## GitHub（源码仓库）安装
 
-将源码包内 `Mirror-Abyss-4.0.32-recovered.6/` 的内容放在 GitHub 仓库根目录；`manifest.json`、`index.js`、`app.js` 与 `style.css` 必须位于根目录，不能只上传 ZIP。然后在 SillyTavern 的“扩展 → 安装扩展”中粘贴该仓库地址。
+将源码包内 `Mirror-Abyss-4.0.32-recovered.8/` 的内容放在 GitHub 仓库根目录；`manifest.json`、`index.js`、`app.js` 与 `style.css` 必须位于根目录，不能只上传 ZIP。然后在 SillyTavern 的“扩展 → 安装扩展”中粘贴该仓库地址。
 
 源码仓库的 `manifest.json` 保持 `auto_update=true`，供 SillyTavern 的 Git 安装／更新流程使用。`index.js` 是静态生命周期入口，加载构建产物 `app.js`；`style.css` 由宿主按清单加载，运行时不会请求 `src/`。
 
@@ -249,6 +269,6 @@ npm run package
 npm run package -- --output /path/on/posix-filesystem/mirror-abyss-release
 ```
 
-4.0.32-recovered.6 的源码、运行文件或文档只要有任一字节变化，就必须重新执行本版本的构建、校验与打包并重算 SHA-256；不得复用 4.0.31 或其他候选的 ZIP／哈希。静态检查、单元测试和候选打包通过都不能写成 SillyTavern 实机 PASS，最终实机结论只能来自源码冻结后的真实环境验收记录。
+4.0.32-recovered.8 的源码、运行文件或文档只要有任一字节变化，就必须重新执行本版本的构建、校验与打包并重算 SHA-256；不得复用 4.0.31 或其他候选的 ZIP／哈希。静态检查、单元测试和候选打包通过都不能写成 SillyTavern 实机 PASS，最终实机结论只能来自源码冻结后的真实环境验收记录。
 
 不要直接编辑根目录 `app.js`；它由 `src/` 生成。架构边界和修改路由见 `ARCHITECTURE.md`，错误定性见 `ERROR-CATALOG.md`。维护页的“三轮完整验收”会调用当前模型路由并执行可回滚的临时世界书事务，因此会产生少量模型请求。
