@@ -1,4 +1,4 @@
-import { createApplication } from './app.js?v=4.0.39';
+import { createApplication } from './app.js?v=4.0.41';
 
 let app = null;
 
