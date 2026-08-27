@@ -1,4 +1,4 @@
-import { startApplication } from './app.js?v=4.0.42';
+import { startApplication } from './app.js?v=4.0.43';
 
 // SillyTavern loads this file; Mirror Abyss appears immediately.
 startApplication();
