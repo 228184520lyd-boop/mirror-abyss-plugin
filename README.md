@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-版本：`4.0.32-recovered.5`
+版本：`4.0.32-recovered.6`
 
 Mirror Abyss 是 SillyTavern 的长期游玩记忆扩展。世界书是唯一长期事实源；模型负责语义整理，插件只负责固定协议、精确身份、UID、单一事务入口、任务编排和界面。
 
@@ -19,6 +19,13 @@ UI或宿主事件 → RuntimeLease / ContextLease → Controller → OperationCo
 - 世界设定粘贴文本与 TXT 共用“AI整理 → 预览 → 确认写入”链。
 - 世界设定、提取和总结均使用自然事实行协议，不使用额外对象外壳。
 - 每个条目展开后的关键词/召回设置提供“定义前”“定义后”和“设为/解除基石”；基石只阻止 AI 自动覆盖与普通删除，玩家仍可直接编辑正文和设置。
+
+## 4.0.32-recovered.6 总结链修复
+
+- 手动“完整处理”与自动处理统一执行场景关闭后的自动总结调度；检测到场景变化并形成 `closedGroups` 后，不再因任务入口是手动触发而跳过小总结。“仅提取”仍只执行提取。
+- 大总结把成功小总结 artifact 视为不可变历史来源；历史快照与当前世界书复用同一 UID 时，不再用当前 UID 内容否定旧快照，也不会删除或覆盖当前实时条目。
+- 同一 UID 出现在多个历史小总结 artifact 时保留为多个独立来源快照，不再在大总结规划阶段按 UID 折叠掉历史阶段。
+- 模型请求成功但未产生最终文本的 `MODEL_EMPTY` 现在与宿主空响应采用同一有限重试边界；连续失败仍作为模型层失败结束，不进入写入事务。
 
 ## 4.0.32-recovered.5 统一模型收口
 
@@ -196,11 +203,11 @@ UI或宿主事件 → RuntimeLease / ContextLease → Controller → OperationCo
 
 每个 SillyTavern 实例只能保留一个镜渊副本。停止 SillyTavern 后，同时检查用户目录 `data/<handle>/extensions/` 与全局目录 `public/scripts/extensions/third-party/`，按大小写不敏感方式移走所有旧副本、版本号目录和大小写变体，只保留一个名为 `mirror-abyss/` 的目录；不要同时安装用户副本与全局副本。随后重启 SillyTavern 并强制刷新页面。
 
-SillyTavern 1.18.0 的扩展“发现”顺序与浏览器静态资源“实际取文件”顺序并不等价：全局 `public/` 静态路由先于用户扩展回退路由注册。因此，同名全局旧副本存在时，扩展管理器即使把用户副本列为 `local`，浏览器仍可能取得全局旧版的 `manifest.json`、`index.js` 和 `app.js`。用户目录不能作为同名全局副本的覆盖升级层；必须先移走全局旧副本再启动。启动后应直接打开实际服务地址下的 `/scripts/extensions/third-party/mirror-abyss/manifest.json`，确认 `version` 为 `4.0.32-recovered.5`；手工部署包还应为 `auto_update=false`，并确认页面中只出现一个镜渊 root、launcher 与聊天状态入口。
+SillyTavern 1.18.0 的扩展“发现”顺序与浏览器静态资源“实际取文件”顺序并不等价：全局 `public/` 静态路由先于用户扩展回退路由注册。因此，同名全局旧副本存在时，扩展管理器即使把用户副本列为 `local`，浏览器仍可能取得全局旧版的 `manifest.json`、`index.js` 和 `app.js`。用户目录不能作为同名全局副本的覆盖升级层；必须先移走全局旧副本再启动。启动后应直接打开实际服务地址下的 `/scripts/extensions/third-party/mirror-abyss/manifest.json`，确认 `version` 为 `4.0.32-recovered.6`；手工部署包还应为 `auto_update=false`，并确认页面中只出现一个镜渊 root、launcher 与聊天状态入口。
 
 ## GitHub（源码仓库）安装
 
-将源码包内 `Mirror-Abyss-4.0.32-recovered.5/` 的内容放在 GitHub 仓库根目录；`manifest.json`、`index.js`、`app.js` 与 `style.css` 必须位于根目录，不能只上传 ZIP。然后在 SillyTavern 的“扩展 → 安装扩展”中粘贴该仓库地址。
+将源码包内 `Mirror-Abyss-4.0.32-recovered.6/` 的内容放在 GitHub 仓库根目录；`manifest.json`、`index.js`、`app.js` 与 `style.css` 必须位于根目录，不能只上传 ZIP。然后在 SillyTavern 的“扩展 → 安装扩展”中粘贴该仓库地址。
 
 源码仓库的 `manifest.json` 保持 `auto_update=true`，供 SillyTavern 的 Git 安装／更新流程使用。`index.js` 是静态生命周期入口，加载构建产物 `app.js`；`style.css` 由宿主按清单加载，运行时不会请求 `src/`。
 
@@ -242,6 +249,6 @@ npm run package
 npm run package -- --output /path/on/posix-filesystem/mirror-abyss-release
 ```
 
-4.0.32-recovered.5 的源码、运行文件或文档只要有任一字节变化，就必须重新执行本版本的构建、校验与打包并重算 SHA-256；不得复用 4.0.31 或其他候选的 ZIP／哈希。静态检查、单元测试和候选打包通过都不能写成 SillyTavern 实机 PASS，最终实机结论只能来自源码冻结后的真实环境验收记录。
+4.0.32-recovered.6 的源码、运行文件或文档只要有任一字节变化，就必须重新执行本版本的构建、校验与打包并重算 SHA-256；不得复用 4.0.31 或其他候选的 ZIP／哈希。静态检查、单元测试和候选打包通过都不能写成 SillyTavern 实机 PASS，最终实机结论只能来自源码冻结后的真实环境验收记录。
 
 不要直接编辑根目录 `app.js`；它由 `src/` 生成。架构边界和修改路由见 `ARCHITECTURE.md`，错误定性见 `ERROR-CATALOG.md`。维护页的“三轮完整验收”会调用当前模型路由并执行可回滚的临时世界书事务，因此会产生少量模型请求。
