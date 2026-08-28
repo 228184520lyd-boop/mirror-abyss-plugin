@@ -1,3 +1,3 @@
-import { startApplication } from './app.js?v=4.0.65';
+import { startApplication } from './app.js?v=4.0.67';
 const ctx = globalThis.SillyTavern?.getContext?.();
 if (ctx) startApplication(ctx);

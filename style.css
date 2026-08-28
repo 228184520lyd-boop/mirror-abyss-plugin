@@ -429,15 +429,3 @@ textarea.ma-input { resize: vertical; }
   .ma-panel, .ma-window, .ma-main > *, .ma-detail-body, .ma-launcher, .ma-atmosphere i, .ma-window::after, .ma-button.is-busy::before { animation: none !important; }
   .ma-button, .ma-close, .ma-tabs .ma-button::after, .ma-choice::after { transition: none !important; }
 }
-
-/* 4.0.65 compatibility: same old skin on the current simple DOM. */
-.ma-window { grid-template-rows: auto auto auto minmax(0,1fr); }
-.ma-ai-raw { margin:0; max-height:180px; overflow:auto; padding:10px 14px; border-bottom:1px solid rgba(166,83,83,.18); background:rgba(255,244,244,.82); color:#873f3f; white-space:pre-wrap; word-break:break-word; font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
-.ma-selection-status { display:flex; align-items:center; justify-content:center; min-height:42px; color:var(--ma-ink-soft); font-size:12px; }
-details.ma-entry-item > summary { list-style:none; cursor:pointer; }
-details.ma-entry-item > summary::-webkit-details-marker { display:none; }
-details.ma-entry-item[open] { background:rgba(255,255,255,.60); }
-.ma-entry-open { color:var(--ma-muted); font-size:11px; text-align:right; }
-.ma-detail-toolbar { margin-top:10px; }
-.ma-inline-actions { flex-wrap:wrap; }
-@media (max-width:720px){ .ma-selection-status{justify-content:flex-start;padding-inline:4px;} }
