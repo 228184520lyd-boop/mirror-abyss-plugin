@@ -1,4 +1,4 @@
-import { startApplication } from './app.js?v=4.0.52';
+import { startApplication } from './app.js?v=4.0.53';
 
 const getContext = globalThis.SillyTavern?.getContext;
 if (typeof getContext !== 'function') throw new Error('SillyTavern 尚未就绪');
