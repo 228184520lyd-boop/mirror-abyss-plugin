@@ -156,6 +156,19 @@ html.ma-panel-open .ma-launcher { opacity: 0; pointer-events: none; }
 .ma-tabs .ma-button.is-active { color: #30363b; }
 .ma-tabs .ma-button.is-active::after { transform: scaleX(1); opacity: 1; }
 
+.ma-ai-raw {
+  margin: 0;
+  padding: 10px 14px;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-bottom: 1px solid rgba(166,83,83,.18);
+  background: rgba(255,245,245,.88);
+  color: #873f3f;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .ma-main {
   min-height: 0;
   overflow-y: auto;
