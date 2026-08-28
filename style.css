@@ -17,7 +17,6 @@
 .ma-panel[hidden] { display: none !important; }
 
 html.ma-panel-open { overflow: hidden; }
-html.ma-panel-open .ma-launcher { opacity: 0; pointer-events: none; }
 
 /* Host-independent overlay. The UI is one boring window; the skin does the work. */
 .ma-panel {
@@ -174,7 +173,10 @@ html.ma-panel-open .ma-launcher { opacity: 0; pointer-events: none; }
   right: max(12px, env(safe-area-inset-right)) !important;
   top: 50dvh !important;
   bottom: auto !important;
-  z-index: 2147483000 !important;
+  z-index: 2147483647 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
   width: 46px !important;
   min-width: 46px !important;
   height: 46px !important;
