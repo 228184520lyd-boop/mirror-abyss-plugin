@@ -1,6 +1,6 @@
 # Mirror Abyss / 镜渊
 
-版本：`4.0.53`
+版本：`4.0.54`
 
 Mirror Abyss 是一个轻量的 SillyTavern 模型记忆搬运工具。
 
