@@ -1,12 +1,12 @@
 # Mirror Abyss / 镜渊
 
-版本：`4.0.43`
+版本：`4.0.51`
 
 Mirror Abyss 是一个轻量的 SillyTavern 模型记忆搬运工具。
 
 ```text
 正文 / 玩家操作
-→ 读取当前世界书
+→ 读取当前权威世界书
 → 调模型
 → 读取约定格式
 → 按 UID / 稳定名称修改条目
@@ -14,7 +14,7 @@ Mirror Abyss 是一个轻量的 SillyTavern 模型记忆搬运工具。
 → UI
 ```
 
-运行源码只有五个普通 JavaScript 文件：`app.js`、`host.js`、`memory.js`、`prompts.js`、`ui.js`。没有事务、Recovery、Repository、CAS、Snapshot、Reconcile、锁系统。
+源码运行边界只有根入口 `index.js`、唯一业务中心 `src/app.js` 和视图 `src/ui.js`。`index.js` 只启动并转交 SillyTavern 事件；世界书、模型、Parser、写入与现有恢复都在 `app.js`；`ui.js` 只渲染并提交操作。没有事务、Recovery、Repository、CAS、Snapshot、Reconcile、锁系统，也不缓存世界书。没有实际变化时不保存世界书。
 
 Edit / Swipe / Delete 使用一份最小撤回记录：只保存该消息操作前的条目值。消息失效时撤回那次操作；新增恢复为不存在，修改恢复为修改前，删除恢复被删除条目。世界书条目本身不保存消息来源追踪。
 
