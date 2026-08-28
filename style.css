@@ -334,6 +334,7 @@ textarea.ma-input { resize: vertical; }
 .ma-entry-item { border-top: 1px solid rgba(57,65,72,.075); background: rgba(255,255,255,.20); transition: background .16s ease; }
 .ma-entry-item:hover { background: rgba(255,255,255,.42); }
 .ma-entry-item.is-expanded { background: rgba(255,255,255,.60); }
+.ma-entry-item.is-selected { background: rgba(232,237,241,.66); }
 .ma-entry-row {
   display: grid;
   grid-template-columns: 24px 34px minmax(0,1fr) 52px;
