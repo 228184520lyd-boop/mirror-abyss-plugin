@@ -429,3 +429,30 @@ textarea.ma-input { resize: vertical; }
   .ma-panel, .ma-window, .ma-main > *, .ma-detail-body, .ma-launcher, .ma-atmosphere i, .ma-window::after, .ma-button.is-busy::before { animation: none !important; }
   .ma-button, .ma-close, .ma-tabs .ma-button::after, .ma-choice::after { transition: none !important; }
 }
+
+/* 4.0.69: interaction-only UI fixes. Keep the old layout; default to a partial window. */
+.ma-window-actions { display:flex; align-items:center; gap:6px; }
+.ma-expand {
+  width:38px; height:38px; display:grid; place-items:center; padding:0;
+  border:1px solid transparent; border-radius:12px; background:rgba(255,255,255,.46);
+  color:#697078; font:500 17px/1 system-ui,sans-serif; cursor:pointer;
+}
+.ma-expand:hover { background:rgba(255,255,255,.86); color:#33383d; }
+.ma-panel { top:11dvh; height:min(76dvh,760px); }
+.ma-panel.is-maximized { top:2dvh; right:max(8px,env(safe-area-inset-right)); width:min(900px,calc(100vw - 16px)); height:96dvh; }
+.ma-launcher { touch-action:none !important; }
+.ma-main > * { animation:none !important; }
+.ma-notes-page { min-height:100%; }
+
+@media (max-width:720px) {
+  .ma-panel {
+    left:6px; right:6px; top:auto; bottom:max(8px,env(safe-area-inset-bottom));
+    width:auto; height:min(74dvh,720px); max-width:none; max-height:none;
+    border:0; border-radius:18px; box-shadow:none;
+  }
+  .ma-panel .ma-window { width:100%; height:100%; border-radius:18px; }
+  .ma-panel.is-maximized {
+    inset:0; width:100vw; height:100dvh; max-width:none; max-height:none; border-radius:0;
+  }
+  .ma-panel.is-maximized .ma-window { border-radius:0; }
+}
