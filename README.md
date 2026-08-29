@@ -1,9 +1,12 @@
-# Mirror Abyss 4.0.84
+# Mirror Abyss 4.0.85
 
 低耦合短代码版。世界书是唯一长期剧情事实源；运行链保持“入口 → 读 → 处理 → 写 → fresh 回读 → 结束”。
 
-## 4.0.84
+## 4.0.85
 
+- 修正 SillyTavern 1.18.0 实机世界书创建链：空闲名改读官方 `world_names`，不再拿 `/api/worldinfo/get` 的空对象判断文件存在。
+- 正式保存后调用官方 `updateWorldInfoList()`，新世界书立即进入宿主世界书列表并绑定当前聊天。
+- `GENERATION_ENDED` 按 ST 真实事件语义处理：事件值是 `chat.length`，因此统一回到最新 AI 消息，不再当作消息索引。
 - 删除模型响应多层猜测、世界书 import 吞错、整本深比较、绑定补偿、手工原生条目 fallback 等防御性第二路径。
 - 新条目只使用 SillyTavern 官方 `createWorldInfoEntry()`；保存只使用官方 `saveWorldInfo()`，随后 fresh read 当前世界书。
 - SceneGroup 只保存实际写动 UID 与 open/closed/small/large 状态，不保存第二份剧情事实。
