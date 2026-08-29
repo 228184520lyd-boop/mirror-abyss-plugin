@@ -1,4 +1,9 @@
-# Mirror Abyss 4.0.95
+# Mirror Abyss 4.0.96
+## 4.0.96
+
+- 修复当前连接后台请求：恢复 `generateRawData → extractMessageFromData` 官方原始响应链，避免 `generateRaw()` 在镜渊取得响应前因清洗结果为空直接抛出 `No message generated`。
+- 当前连接不再临时改写 SillyTavern 全局响应长度；`responseTokens` 继续用于显式 Connection Profile 请求。
+
 ## 4.0.95
 
 - 修复“跟随 SillyTavern 当前连接”时模型请求没有传递镜渊 `responseTokens`：现在 `generateRaw()` 与 Connection Profile 路径使用同一输出 token 上限。
