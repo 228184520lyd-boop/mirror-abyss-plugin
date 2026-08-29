@@ -1,4 +1,18 @@
-# Mirror Abyss 4.0.96
+# Mirror Abyss 4.0.98
+## 4.0.98
+
+- 删除生产核心中的 `__MIRROR_ABYSS_WORLD_INFO_API__` 世界书替代入口和无职责的世界书 import 缓存包装；启动时直接从 SillyTavern `world-info.js` 取得 `createWorldInfoEntry`，fresh read 只读 SillyTavern `/api/worldinfo/get`。
+- 删除 UI 未调用的 `updateEntry / updateRecall / cornerstone / position / folder / remove / test` API 别名，避免同一功能存在多个出口。
+- `saveEntry()` 只保存条目编辑器实际提交的正文、关键词、次关键词和文件夹；常驻、焦点、基石、定义位置继续只走各自唯一入口。
+- 删除消息状态灯 60ms / 240ms 补偿式重复刷新；每次真实状态变化只刷新一次。
+- 本版不修改 Edit / Swipe / Delete 事件参数兼容，待实参链完整确认后再处理。
+
+## 4.0.97
+
+- 当前连接删除镜渊自建的原始响应解析薄层：不再调用 `generateRawData`、`extractMessageFromData` 或 `generateRaw`。
+- 当前连接直接调用 SillyTavern `generateQuietPrompt()`；ST 负责当前连接和最终文本，镜渊只读取返回文本并进入既有 Parser。
+- 显式 Connection Profile 继续直接调用 SillyTavern `ConnectionManagerRequestService.sendRequest()`；不新增请求适配、响应解析或兜底链。
+
 ## 4.0.96
 
 - 修复当前连接后台请求：恢复 `generateRawData → extractMessageFromData` 官方原始响应链，避免 `generateRaw()` 在镜渊取得响应前因清洗结果为空直接抛出 `No message generated`。
