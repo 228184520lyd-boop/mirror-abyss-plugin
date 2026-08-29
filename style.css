@@ -954,14 +954,8 @@
   background: rgba(255, 255, 255, 0.68);
   box-shadow: 0 3px 12px rgba(65, 51, 45, 0.03);
   transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease, transform 150ms ease;
-  animation: ma-ivory-card-in 190ms ease-out both;
 }
 
-.ma-lite-entry-row:nth-child(2) { animation-delay: 20ms; }
-.ma-lite-entry-row:nth-child(3) { animation-delay: 40ms; }
-.ma-lite-entry-row:nth-child(4) { animation-delay: 60ms; }
-.ma-lite-entry-row:nth-child(5) { animation-delay: 80ms; }
-.ma-lite-entry-row:nth-child(n + 6) { animation-delay: 100ms; }
 
 .ma-lite-entry-row::before {
   content: "";
