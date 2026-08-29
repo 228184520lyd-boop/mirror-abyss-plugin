@@ -1,4 +1,12 @@
-# Mirror Abyss 4.0.98
+# Mirror Abyss 4.0.99
+## 4.0.99
+
+- 对照本轮最初的 4.0.85 恢复当前连接唯一模型出口：`generateRaw({ systemPrompt, prompt, trimNames:false })`；不再把已准备好的规则和正文合并进 `generateQuietPrompt()`。
+- 当前连接不传镜渊 `responseTokens`，继续沿用 SillyTavern 当前连接自身的生成长度；显式 Connection Profile 仍使用 `responseTokens`。
+- 修复自动任务启动时机：普通 `MESSAGE_RECEIVED` 只登记待处理 AI 消息，不立即发模型请求；统一等 `GENERATION_ENDED` 后再启动队列，避免主正文生成尚未完全结束时审核/提取/总结抢占同一宿主模型连接。
+- 群聊连续产生的多条 AI 消息继续逐条保留在原队列中；`GENERATION_ENDED` 只负责放行队列，不改提取、审核或总结语义。
+- `first_message` 保留原即时处理行为；Edit / Swipe / Delete 的重处理仍走原有明确入口。
+
 ## 4.0.98
 
 - 删除生产核心中的 `__MIRROR_ABYSS_WORLD_INFO_API__` 世界书替代入口和无职责的世界书 import 缓存包装；启动时直接从 SillyTavern `world-info.js` 取得 `createWorldInfoEntry`，fresh read 只读 SillyTavern `/api/worldinfo/get`。
