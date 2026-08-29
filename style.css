@@ -918,6 +918,34 @@
   display: none !important;
 }
 
+.ma-lite-manual-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--ma-line);
+  border-bottom: 1px solid var(--ma-line);
+}
+
+.ma-lite-manual-summary-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.ma-lite-manual-summary-actions .ma-lite-action {
+  min-height: 34px;
+  padding: 7px 12px;
+}
+
+.ma-lite-manual-summary > small {
+  color: var(--ma-muted);
+  font-size: 10px;
+  line-height: 1.45;
+  text-align: right;
+}
+
 .ma-lite-selection-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2195,6 +2223,20 @@
   .ma-lite-entry-keywords,
   .ma-lite-recall-meta {
     gap: 4px;
+  }
+
+  .ma-lite-manual-summary {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ma-lite-manual-summary-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ma-lite-manual-summary > small {
+    text-align: left;
   }
 
   .ma-lite-worldbook-quick-actions,
