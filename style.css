@@ -2826,3 +2826,7 @@
   .ma-lite-folder-select { grid-column: 1 / -1; }
   .ma-lite-confirm-actions { grid-template-columns: 1fr 1fr; }
 }
+
+
+.ma-lite-audit-raw { display: grid; gap: 8px; }
+.ma-lite-audit-raw > pre { margin: 0; padding: 12px 14px; max-height: 240px; overflow: auto; border: 1px solid var(--ma-line); border-radius: 10px; background: var(--ma-paper-cool); color: var(--ma-ink-soft); white-space: pre-wrap; word-break: break-word; font: 12px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; }
