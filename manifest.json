@@ -4,8 +4,8 @@
   "js": "index.js",
   "css": "style.css",
   "author": "228184520lyd-boop",
-  "version": "4.0.125",
+  "version": "4.0.126",
   "minimum_client_version": "1.18.0",
   "auto_update": false,
-  "description": "轻量模型记忆搬运工具｜世界书唯一事实源"
+  "description": "SillyTavern 世界书长期记忆管理｜世界书唯一事实源"
 }
